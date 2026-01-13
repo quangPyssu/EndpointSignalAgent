@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "dgSpecHash": "n5sSASfvyjA=",
+  "success": false,
+  "projectFilePath": "D:\\APCS_Project\\ContinuousAuth\\EndpointSignalAgent\\EndpointSignalAgent.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration\\8.0.0\\microsoft.extensions.configuration.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.abstractions\\8.0.0\\microsoft.extensions.configuration.abstractions.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.binder\\8.0.2\\microsoft.extensions.configuration.binder.8.0.2.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.commandline\\8.0.0\\microsoft.extensions.configuration.commandline.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.environmentvariables\\8.0.0\\microsoft.extensions.configuration.environmentvariables.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.fileextensions\\8.0.1\\microsoft.extensions.configuration.fileextensions.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.json\\8.0.1\\microsoft.extensions.configuration.json.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.configuration.usersecrets\\8.0.1\\microsoft.extensions.configuration.usersecrets.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.dependencyinjection\\10.0.1\\microsoft.extensions.dependencyinjection.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.dependencyinjection.abstractions\\10.0.1\\microsoft.extensions.dependencyinjection.abstractions.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.diagnostics\\8.0.1\\microsoft.extensions.diagnostics.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.diagnostics.abstractions\\8.0.1\\microsoft.extensions.diagnostics.abstractions.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.fileproviders.abstractions\\8.0.0\\microsoft.extensions.fileproviders.abstractions.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.fileproviders.physical\\8.0.0\\microsoft.extensions.fileproviders.physical.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.filesystemglobbing\\8.0.0\\microsoft.extensions.filesystemglobbing.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.hosting\\8.0.1\\microsoft.extensions.hosting.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.hosting.abstractions\\8.0.1\\microsoft.extensions.hosting.abstractions.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.hosting.windowsservices\\10.0.1\\microsoft.extensions.hosting.windowsservices.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging\\10.0.1\\microsoft.extensions.logging.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging.abstractions\\10.0.1\\microsoft.extensions.logging.abstractions.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging.configuration\\8.0.1\\microsoft.extensions.logging.configuration.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging.console\\8.0.1\\microsoft.extensions.logging.console.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging.debug\\8.0.1\\microsoft.extensions.logging.debug.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging.eventlog\\10.0.1\\microsoft.extensions.logging.eventlog.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.logging.eventsource\\8.0.1\\microsoft.extensions.logging.eventsource.8.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.options\\10.0.1\\microsoft.extensions.options.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.options.configurationextensions\\8.0.0\\microsoft.extensions.options.configurationextensions.8.0.0.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.extensions.primitives\\10.0.1\\microsoft.extensions.primitives.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\system.diagnostics.diagnosticsource\\10.0.1\\system.diagnostics.diagnosticsource.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\system.diagnostics.eventlog\\10.0.1\\system.diagnostics.eventlog.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\system.serviceprocess.servicecontroller\\10.0.1\\system.serviceprocess.servicecontroller.10.0.1.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.22\\microsoft.windowsdesktop.app.ref.8.0.22.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.22\\microsoft.netcore.app.ref.8.0.22.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.22\\microsoft.aspnetcore.app.ref.8.0.22.nupkg.sha512",
+    "C:\\Users\\WIN11\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\8.0.22\\microsoft.netcore.app.host.win-x64.8.0.22.nupkg.sha512"
+  ],
+  "logs": [
+    {
+      "code": "NU1605",
+      "level": "Error",
+      "message": "Warning As Error: Detected package downgrade: Microsoft.Extensions.Hosting from 10.0.1 to 8.0.1. Reference the package directly from the project to select a different version. \r\n EndpointSignalAgent -> Microsoft.Extensions.Hosting.WindowsServices 10.0.1 -> Microsoft.Extensions.Hosting (>= 10.0.1) \r\n EndpointSignalAgent -> Microsoft.Extensions.Hosting (>= 8.0.1)",
+      "projectPath": "D:\\APCS_Project\\ContinuousAuth\\EndpointSignalAgent\\EndpointSignalAgent.csproj",
+      "filePath": "D:\\APCS_Project\\ContinuousAuth\\EndpointSignalAgent\\EndpointSignalAgent.csproj",
+      "libraryId": "Microsoft.Extensions.Hosting",
+      "targetGraphs": [
+        "net8.0"
+      ]
+    }
+  ]
+}
