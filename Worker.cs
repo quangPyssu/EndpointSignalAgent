@@ -38,8 +38,8 @@ public class Worker(ILogger<Worker> logger, IHttpClientFactory httpClientFactory
 
                 var client = httpClientFactory.CreateClient("backend");
 
-                // Put backend URL in config (next step)
-                var resp = await client.PostAsJsonAsync("/api/agent/signals", req, stoppingToken);
+                // Temporary test endpoint while backend is being developed
+                var resp = await client.PostAsJsonAsync("/post", req, stoppingToken);
 
                 if (resp.IsSuccessStatusCode)
                 {
