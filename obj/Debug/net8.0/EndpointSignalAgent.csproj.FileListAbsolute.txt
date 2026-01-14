@@ -46,3 +46,8 @@ D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\obj\Debug\net8.0\refint\Endpo
 D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\obj\Debug\net8.0\EndpointSignalAgent.pdb
 D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\obj\Debug\net8.0\EndpointSignalAgent.genruntimeconfig.cache
 D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\obj\Debug\net8.0\ref\EndpointSignalAgent.dll
+D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\obj\Debug\net8.0\EndpointSignalAgent.sourcelink.json
+D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\bin\Debug\net8.0\Microsoft.Extensions.Hosting.WindowsServices.dll
+D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\bin\Debug\net8.0\Microsoft.Extensions.Http.dll
+D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\bin\Debug\net8.0\System.ServiceProcess.ServiceController.dll
+D:\APCS_Project\ContinuousAuth\EndpointSignalAgent\bin\Debug\net8.0\runtimes\win\lib\net8.0\System.ServiceProcess.ServiceController.dll

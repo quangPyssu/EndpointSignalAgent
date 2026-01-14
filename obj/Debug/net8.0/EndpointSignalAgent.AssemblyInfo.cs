@@ -15,7 +15,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("EndpointSignalAgent")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ad1bbb436ccadc1ed686bee59f1f52811aef8f60")]
 [assembly: System.Reflection.AssemblyProductAttribute("EndpointSignalAgent")]
 [assembly: System.Reflection.AssemblyTitleAttribute("EndpointSignalAgent")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
