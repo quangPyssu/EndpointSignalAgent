@@ -12,4 +12,11 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="src\Collectors\" />
+    <Folder Include="src\Buffering\" />
+    <Folder Include="src\Transport\" />
+    <Folder Include="src\Pipeline\" />
+  </ItemGroup>
 </Project>
