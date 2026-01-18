@@ -1,4 +1,4 @@
-﻿namespace EndpointSignalAgent.Contracts;
+namespace EndpointSignalAgent.Contracts;
 
 public sealed record SignalBatchRequest(
     string DeviceId,
@@ -9,6 +9,6 @@ public sealed record SignalBatchRequest(
 
 public sealed record SignalEvent(
     DateTimeOffset TimestampUtc,
-    string Type,                  // e.g., "SessionLock", "AppFocus", "Network"
+    string Type,
     Dictionary<string, string> Payload
 );

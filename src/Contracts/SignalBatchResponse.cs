@@ -1,8 +1,8 @@
-﻿namespace EndpointSignalAgent.Contracts;
+namespace EndpointSignalAgent.Contracts;
 
 public sealed record SignalBatchResponse(
-    string Decision,              // "ALLOW" | "WARN" | "STEP_UP" | "LOCK"
-    double RiskScore,                // 0-100 (example)
+    string Decision,
+    double RiskScore,
     string? Message = null,
     int? NextReportSeconds = null
 );

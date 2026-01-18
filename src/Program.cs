@@ -1,7 +1,13 @@
-using EndpointSignalAgent;
+using EndpointSignalAgent.Clients;
+using EndpointSignalAgent.Configuration;
+using EndpointSignalAgent.Contracts;
+using EndpointSignalAgent.Handlers;
+using EndpointSignalAgent.Identity;
+using EndpointSignalAgent.Providers;
+using EndpointSignalAgent.Services;
+using EndpointSignalAgent.State;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
-using System.Diagnostics.Contracts;
 using System.Threading.Channels;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -27,7 +33,7 @@ builder.Services.AddOptions<AgentOptions>()
 builder.Services.AddSingleton(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-    return Channel.CreateBounded<EndpointSignalAgent.Contracts.SignalBatchRequest>(new BoundedChannelOptions(opts.OutgoingQueueCapacity)
+    return Channel.CreateBounded<SignalBatchRequest>(new BoundedChannelOptions(opts.OutgoingQueueCapacity)
     {
         FullMode = BoundedChannelFullMode.DropOldest,
         SingleWriter = true,
@@ -39,7 +45,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-    return Channel.CreateBounded<EndpointSignalAgent.Contracts.StatusResponse>(new BoundedChannelOptions(opts.DecisionQueueCapacity)
+    return Channel.CreateBounded<StatusResponse>(new BoundedChannelOptions(opts.DecisionQueueCapacity)
     {
         FullMode = BoundedChannelFullMode.DropOldest,
         SingleWriter = true,
@@ -64,30 +70,10 @@ builder.Services.AddHttpClient<BackendClient>((sp, client) =>
 });
 
 // Hosted services
-builder.Services.AddHostedService<BatchProducerService>();        // -> outgoing queue
-builder.Services.AddHostedService<BatchSendService>();            // outgoing queue -> /send
-builder.Services.AddHostedService<StatusPollService>();           // /status -> decision queue
-builder.Services.AddHostedService<DecisionProcessorService>();    // decision queue -> state updates
+builder.Services.AddHostedService<BatchProducerService>();
+builder.Services.AddHostedService<BatchSendService>();
+builder.Services.AddHostedService<StatusPollService>();
+builder.Services.AddHostedService<DecisionProcessorService>();
 
 var host = builder.Build();
 host.Run();
-
-namespace EndpointSignalAgent
-{
-    public sealed class BackendOptions
-    {
-        public string BaseUrl { get; set; } = "";
-        public string SendPath { get; set; } = "/send";       // NEW
-        public string StatusPath { get; set; } = "/status";   // NEW
-        public int TimeoutSeconds { get; set; } = 10;
-    }
-
-    public sealed class AgentOptions
-    {
-        public int DefaultReportSeconds { get; set; } = 10;
-        public int StatusPollSeconds { get; set; } = 5;
-
-        public int OutgoingQueueCapacity { get; set; } = 300;
-        public int DecisionQueueCapacity { get; set; } = 300;
-    }
-}

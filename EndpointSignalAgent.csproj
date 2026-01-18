@@ -15,8 +15,5 @@
 
   <ItemGroup>
     <Folder Include="src\Collectors\" />
-    <Folder Include="src\Buffering\" />
-    <Folder Include="src\Transport\" />
-    <Folder Include="src\Pipeline\" />
   </ItemGroup>
 </Project>
