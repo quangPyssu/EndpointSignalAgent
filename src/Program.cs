@@ -1,4 +1,5 @@
 using EndpointSignalAgent.Clients;
+using EndpointSignalAgent.Collectors;
 using EndpointSignalAgent.Configuration;
 using EndpointSignalAgent.Contracts;
 using EndpointSignalAgent.Handlers;
@@ -63,10 +64,14 @@ builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
 
 // Collectors
 
-builder.Services.AddSingleton<ISignalProvider>(_ =>
-    new SpoolFileSignalProvider(
+builder.Services.AddSingleton<ISignalProvider>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<SpoolFileSignalProvider>>();
+    return new SpoolFileSignalProvider(
         spoolPath: @"spool\signals.jsonl",
-        offsetPath: @"spool\signals.offset"));
+        offsetPath: @"spool\signals.offset",
+        logger: logger);
+});
 
 
 // Backend client
@@ -76,8 +81,24 @@ builder.Services.AddHttpClient<BackendClient>((sp, client) =>
     client.BaseAddress = new Uri(b.BaseUrl);
     client.Timeout = TimeSpan.FromSeconds(b.TimeoutSeconds);
 });
+// TEST CODE - Remove after testing // write more test events to the spool file
+
+for (int i = 0; i < 5; i++)
+{
+    var testCollectorLoop = new SpoolFileCollector("spool/signals.jsonl");
+    await testCollectorLoop.WriteAsync(new SignalEvent(
+        DateTimeOffset.UtcNow,
+        SignalEventType.Heartbeat,
+        new Dictionary<string, string> { ["test"] = $"loop_test_{i}" }
+    ));
+    testCollectorLoop.Dispose();
+    Console.WriteLine($" Test event {i} written to spool");
+}
+// END TEST CODE
 
 // Hosted services
+//builder.Services.AddHostedService<SessionStateCollector>();
+
 builder.Services.AddHostedService<BatchProducerService>();
 builder.Services.AddHostedService<BatchSendService>();
 builder.Services.AddHostedService<StatusPollService>();
