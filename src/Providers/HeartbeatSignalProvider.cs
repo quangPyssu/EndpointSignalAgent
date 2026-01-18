@@ -10,7 +10,7 @@ public sealed class HeartbeatSignalProvider : ISignalProvider
         {
             new SignalEvent(
                 TimestampUtc: DateTimeOffset.UtcNow,
-                Type: "Heartbeat",
+                Type: SignalEventType.Heartbeat,
                 Payload: new Dictionary<string, string>
                 {
                     ["user"] = Environment.UserName,

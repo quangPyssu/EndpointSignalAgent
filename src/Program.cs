@@ -61,6 +61,14 @@ builder.Services.AddSingleton<IAgentIdentity, AgentIdentity>();
 builder.Services.AddSingleton<ISignalProvider, HeartbeatSignalProvider>();
 builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
 
+// Collectors
+
+builder.Services.AddSingleton<ISignalProvider>(_ =>
+    new SpoolFileSignalProvider(
+        spoolPath: @"spool\signals.jsonl",
+        offsetPath: @"spool\signals.offset"));
+
+
 // Backend client
 builder.Services.AddHttpClient<BackendClient>((sp, client) =>
 {
