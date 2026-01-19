@@ -1,16 +1,14 @@
-﻿using System.Management; // NuGet: System.Management
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using EndpointSignalAgent.Contracts;
 using EndpointSignalAgent.Collectors; // where SpoolFileCollector lives
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Management;
 
 public sealed class SessionStateCollector : BackgroundService
 {
     private readonly ILogger<SessionStateCollector> _logger;
     private readonly string _spoolPath;
-
-    private ManagementEventWatcher? _sessionWatcher;
 
     private int _lastIdleBucketSec = -1;
 
@@ -32,39 +30,40 @@ public sealed class SessionStateCollector : BackgroundService
 
     private void StartSessionWatcher()
     {
-        // Reason 7 = lock, 8 = unlock
-        var query = new WqlEventQuery("SELECT * FROM Win32_SessionChangeEvent WHERE Reason = 7 OR Reason = 8");
-        _sessionWatcher = new ManagementEventWatcher(query);
-
-        _sessionWatcher.EventArrived += async (_, e) =>
+        try
         {
-            try
+            Microsoft.Win32.SystemEvents.SessionSwitch += OnSessionSwitch;
+            _logger.LogInformation("SessionStateCollector: session watcher started");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start session watcher");
+            throw;
+        }
+    }
+
+    private async void OnSessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
+    {
+        try
+        {
+            var type = e.Reason switch
             {
-                var reason = Convert.ToInt32(e.NewEvent.Properties["Reason"].Value);
-                var sessionId = Convert.ToString(e.NewEvent.Properties["SessionID"].Value) ?? "";
+                Microsoft.Win32.SessionSwitchReason.SessionLock => SignalEventType.SessionLock,
+                Microsoft.Win32.SessionSwitchReason.SessionUnlock => SignalEventType.SessionUnlock,
+                _ => SignalEventType.Unknown
+            };
 
-                var type = reason switch
-                {
-                    7 => SignalEventType.SessionLock,
-                    8 => SignalEventType.SessionUnlock,
-                    _ => SignalEventType.Unknown
-                };
+            if (type == SignalEventType.Unknown) return;
 
-                if (type == SignalEventType.Unknown) return;
-
-                await WriteAsync(type, new Dictionary<string, string>
-                {
-                    ["sessionId"] = sessionId
-                });
-            }
-            catch (Exception ex)
+            await WriteAsync(type, new Dictionary<string, string>
             {
-                _logger.LogWarning(ex, "Session watcher event processing failed");
-            }
-        };
-
-        _sessionWatcher.Start();
-        _logger.LogInformation("SessionStateCollector: session watcher started");
+                //["sessionId"] = e.SessionId.ToString()
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Session watcher event processing failed");
+        }
     }
 
     private async Task IdleLoop(CancellationToken ct)
@@ -114,8 +113,7 @@ public sealed class SessionStateCollector : BackgroundService
     {
         try
         {
-            _sessionWatcher?.Stop();
-            _sessionWatcher?.Dispose();
+            Microsoft.Win32.SystemEvents.SessionSwitch -= OnSessionSwitch;
         }
         catch { /* ignore */ }
 
