@@ -88,6 +88,7 @@ builder.Services.AddHostedService<EnrollOnStartupService>();
 
 // Hosted services
 builder.Services.AddHostedService<SessionStateCollector>();
+builder.Services.AddHostedService<ApplicationUsageCollector>();
 
 builder.Services.AddHostedService<BatchProducerService>();
 builder.Services.AddHostedService<BatchSendService>();

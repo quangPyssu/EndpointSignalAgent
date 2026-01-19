@@ -99,14 +99,22 @@ public sealed class SessionStateCollector : BackgroundService
         }
     }
 
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+
     private async Task WriteAsync(SignalEventType type, Dictionary<string, string> payload)
     {
-        using var writer = new SpoolFileCollector(_spoolPath);
-        await writer.WriteAsync(new SignalEvent(
-            DateTimeOffset.UtcNow,
-            type,
-            payload));
+        await _writeLock.WaitAsync();
+        try
+        {
+            using var writer = new SpoolFileCollector(_spoolPath);
+            await writer.WriteAsync(new SignalEvent(DateTimeOffset.UtcNow, type, payload));
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
+
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
