@@ -2,3 +2,19 @@
 [Bb]in/
 [Oo]bj/
 /spool
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# User Secrets
+secrets.json
+
+# Environment-specific settings (if they contain sensitive data)
+appsettings.Local.json
+appsettings.*.local.json
+
+# Enrollment data (device-specific)
+spool/enrollment.json

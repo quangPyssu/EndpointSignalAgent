@@ -2,7 +2,6 @@ using System.Threading.Channels;
 using EndpointSignalAgent.Clients;
 using EndpointSignalAgent.Configuration;
 using EndpointSignalAgent.Contracts;
-using EndpointSignalAgent.Identity;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -13,13 +12,14 @@ public sealed class StatusPollService(
     ILogger<StatusPollService> logger,
     Channel<StatusResponse> decisionQueue,
     IOptions<AgentOptions> agentOptions,
-    IAgentIdentity identity,
+    IEnrollmentStore enrollment,
     BackendClient backend)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("Status poller started");
+        var deviceId = await enrollment.GetIdAsync(stoppingToken);
+        logger.LogInformation("Status poller started for device {DeviceId}", deviceId);
 
         try
         {
@@ -27,7 +27,7 @@ public sealed class StatusPollService(
             {
                 try
                 {
-                    var req = new StatusRequest(identity.DeviceId, identity.SessionId);
+                    var req = new StatusRequest(DeviceId: deviceId);
                     var status = await backend.PollStatusAsync(req, stoppingToken);
 
                     if (status is not null)

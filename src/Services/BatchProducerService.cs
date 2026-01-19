@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using EndpointSignalAgent.Configuration;
 using EndpointSignalAgent.Contracts;
@@ -14,14 +15,17 @@ public sealed class BatchProducerService(
     ILogger<BatchProducerService> logger,
     Channel<SignalBatchRequest> outgoingQueue,
     IOptions<AgentOptions> agentOptions,
-    IAgentIdentity identity,
+    IEnrollmentStore enrollment,
     IAgentState state,
     IEnumerable<ISignalProvider> signalProviders)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("Producer started");
+        // Wait for enrollment to complete
+        var deviceId = await enrollment.GetIdAsync(stoppingToken);
+
+        logger.LogInformation("Producer started for device {DeviceId}", deviceId);
 
         try
         {
@@ -35,11 +39,12 @@ public sealed class BatchProducerService(
                     if (batch.Count > 0) events.AddRange(batch);
                 }
 
+                // Serialize events to JSON string for the 'data' field
+                var dataJson = JsonSerializer.Serialize(events);
+
                 var req = new SignalBatchRequest(
-                    DeviceId: identity.DeviceId,
-                    SessionId: identity.SessionId,
-                    SentAt: DateTimeOffset.UtcNow,
-                    Events: events);
+                    DeviceId: deviceId,
+                    Data: dataJson);
 
                 await outgoingQueue.Writer.WriteAsync(req, stoppingToken);
 

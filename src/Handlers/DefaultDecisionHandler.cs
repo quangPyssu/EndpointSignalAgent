@@ -10,10 +10,10 @@ public sealed class DefaultDecisionHandler(
 {
     public void Handle(StatusResponse status)
     {
-        logger.LogInformation("Status decision={Decision} risk={Risk} msg={Msg}",
-            status.Decision, status.RiskScore, status.Message);
+        logger.LogInformation("Status received: {Status}", status.Status);
 
-        if (status.NextReportSeconds is { } s)
-            state.TrySetReportSeconds(s);
+        // Parse the status string to make decisions
+        // You can extend this to handle different status values
+        // e.g., "allow", "deny", "challenge", etc.
     }
 }

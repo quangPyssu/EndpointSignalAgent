@@ -1,9 +1,8 @@
 ﻿using System.Runtime.InteropServices;
 using EndpointSignalAgent.Contracts;
-using EndpointSignalAgent.Collectors; // where SpoolFileCollector lives
+using EndpointSignalAgent.Collectors;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Management;
 
 public sealed class SessionStateCollector : BackgroundService
 {
@@ -57,7 +56,7 @@ public sealed class SessionStateCollector : BackgroundService
 
             await WriteAsync(type, new Dictionary<string, string>
             {
-                //["sessionId"] = e.SessionId.ToString()
+                ["reason"] = e.Reason.ToString()
             });
         }
         catch (Exception ex)
