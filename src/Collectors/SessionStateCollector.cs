@@ -1,20 +1,18 @@
 ﻿using System.Runtime.InteropServices;
 using EndpointSignalAgent.Contracts;
 using EndpointSignalAgent.Collectors;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-public sealed class SessionStateCollector : BackgroundService
+public sealed class SessionStateCollector : SignalCollectorBase
 {
     private readonly ILogger<SessionStateCollector> _logger;
-    private readonly string _spoolPath;
 
     private int _lastIdleBucketSec = -1;
 
     public SessionStateCollector(ILogger<SessionStateCollector> logger)
+        : base(@"spool\signals.jsonl")
     {
         _logger = logger;
-        _spoolPath = @"spool\signals.jsonl";
     }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
@@ -54,7 +52,7 @@ public sealed class SessionStateCollector : BackgroundService
 
             if (type == SignalEventType.Unknown) return;
 
-            await WriteAsync(type, new Dictionary<string, string>
+            await WriteSignalAsync(type, new Dictionary<string, string>
             {
                 ["reason"] = e.Reason.ToString()
             });
@@ -83,7 +81,7 @@ public sealed class SessionStateCollector : BackgroundService
                 {
                     _lastIdleBucketSec = bucketSec;
 
-                    await WriteAsync(SignalEventType.IdleSample, new Dictionary<string, string>
+                    await WriteSignalAsync(SignalEventType.IdleSample, new Dictionary<string, string>
                     {
                         ["idleMs"] = idleMs.ToString(),
                         ["idleBucketSec"] = bucketSec.ToString()
@@ -98,23 +96,6 @@ public sealed class SessionStateCollector : BackgroundService
             await Task.Delay(TimeSpan.FromSeconds(2), ct);
         }
     }
-
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
-
-    private async Task WriteAsync(SignalEventType type, Dictionary<string, string> payload)
-    {
-        await _writeLock.WaitAsync();
-        try
-        {
-            using var writer = new SpoolFileCollector(_spoolPath);
-            await writer.WriteAsync(new SignalEvent(DateTimeOffset.UtcNow, type, payload));
-        }
-        finally
-        {
-            _writeLock.Release();
-        }
-    }
-
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {

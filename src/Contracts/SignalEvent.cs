@@ -24,6 +24,10 @@ public enum SignalEventType
 
     ForegroundAppChanged,
 
+    AppDwell,
+
+    AppSwitchRate,
+
     WifiSsidHash,
 
     VpnState
