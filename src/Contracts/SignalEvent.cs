@@ -30,7 +30,13 @@ public enum SignalEventType
 
     WifiSsidHash,
 
-    VpnState
+    VpnState,
+    ScreenSaverOn,
+    ScreenSaverOff,
+    DisplayOn,
+    DisplayOff,
+    DisplayDimmed,
+
 }
 
 public static class SignalEventTypeParser

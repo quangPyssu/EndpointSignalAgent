@@ -8,7 +8,6 @@ namespace EndpointSignalAgent.Collectors;
 public sealed class SpoolFileCollector : IDisposable
 {
     private readonly string _spoolPath;
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions;
 
     public SpoolFileCollector(string spoolPath)
@@ -32,42 +31,34 @@ public sealed class SpoolFileCollector : IDisposable
 
     public async Task WriteAsync(IEnumerable<SignalEvent> signalEvents, CancellationToken ct = default)
     {
-        await _writeLock.WaitAsync(ct);
-        try
-        {
-            using var fs = new FileStream(
-                _spoolPath,
-                FileMode.Append,
-                FileAccess.Write,
-                FileShare.Read,
-                bufferSize: 4096,
-                useAsync: true);
+        using var fs = new FileStream(
+            _spoolPath,
+            FileMode.Append,
+            FileAccess.Write,
+            FileShare.Read,
+            bufferSize: 4096,
+            useAsync: true);
 
-            foreach (var ev in signalEvents)
+        foreach (var ev in signalEvents)
+        {
+            var lineObj = new
             {
-                var lineObj = new
-                {
-                    ts = ev.TimestampUtc,
-                    type = ev.Type.ToString(),
-                    payload = ev.Payload
-                };
+                ts = ev.TimestampUtc,
+                type = ev.Type.ToString(),
+                payload = ev.Payload
+            };
 
-                var json = JsonSerializer.Serialize(lineObj, _jsonOptions);
-                var lineBytes = Encoding.UTF8.GetBytes(json + "\n");
+            var json = JsonSerializer.Serialize(lineObj, _jsonOptions);
+            var lineBytes = Encoding.UTF8.GetBytes(json + "\n");
 
-                await fs.WriteAsync(lineBytes, ct);
-            }
-
-            await fs.FlushAsync(ct);
+            await fs.WriteAsync(lineBytes, ct);
         }
-        finally
-        {
-            _writeLock.Release();
-        }
+
+        await fs.FlushAsync(ct);
     }
 
     public void Dispose()
     {
-        _writeLock.Dispose();
+        // No resources to dispose
     }
 }
