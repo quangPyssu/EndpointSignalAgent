@@ -18,3 +18,4 @@ appsettings.*.local.json
 
 # Enrollment data (device-specific)
 spool/enrollment.json
+/spool

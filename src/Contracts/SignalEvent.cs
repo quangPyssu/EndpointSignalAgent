@@ -24,9 +24,19 @@ public enum SignalEventType
 
     ForegroundAppChanged,
 
+    AppDwell,
+
+    AppSwitchRate,
+
     WifiSsidHash,
 
-    VpnState
+    VpnState,
+    ScreenSaverOn,
+    ScreenSaverOff,
+    DisplayOn,
+    DisplayOff,
+    DisplayDimmed,
+
 }
 
 public static class SignalEventTypeParser

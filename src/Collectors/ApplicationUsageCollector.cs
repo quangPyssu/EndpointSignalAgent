@@ -1,20 +1,18 @@
-﻿using System;
+﻿using EndpointSignalAgent.Collectors;
+using EndpointSignalAgent.Contracts;
+using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
-public sealed class ApplicationUsageCollector : BackgroundService
+public sealed class ApplicationUsageCollector : SignalCollectorBase
 {
     private readonly ILogger<ApplicationUsageCollector> _logger;
-    private readonly string _spoolPath;
 
     // Tuning knobs (lightweight defaults)
     private readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(750);
@@ -27,10 +25,9 @@ public sealed class ApplicationUsageCollector : BackgroundService
     private DateTimeOffset _windowStart;
 
     public ApplicationUsageCollector(ILogger<ApplicationUsageCollector> logger, string spoolPath = @"spool\signals.jsonl")
+        : base(spoolPath)
     {
         _logger = logger;
-        _spoolPath = spoolPath;
-        Directory.CreateDirectory(Path.GetDirectoryName(_spoolPath)!);
 
         _windowStart = DateTimeOffset.UtcNow;
         _currentSince = _windowStart;
@@ -49,16 +46,11 @@ public sealed class ApplicationUsageCollector : BackgroundService
                 // Emit switch-rate once per window
                 if (now - _windowStart >= _switchRateWindow)
                 {
-                    await WriteEventAsync(new
+                    await WriteSignalAsync(SignalEventType.AppSwitchRate, new Dictionary<string, string>
                     {
-                        ts = now,
-                        type = "AppSwitchRate",
-                        payload = new
-                        {
-                            windowSec = (int)_switchRateWindow.TotalSeconds,
-                            switches = _switchesInWindow
-                        }
-                    }, stoppingToken);
+                        ["windowSec"] = ((int)_switchRateWindow.TotalSeconds).ToString(),
+                        ["switches"] = _switchesInWindow.ToString()
+                    });
 
                     _switchesInWindow = 0;
                     _windowStart = now;
@@ -78,12 +70,11 @@ public sealed class ApplicationUsageCollector : BackgroundService
                     _currentSince = now;
 
                     // Optional: emit initial context
-                    await WriteEventAsync(new
+                    await WriteSignalAsync(SignalEventType.ForegroundAppChanged, new Dictionary<string, string>
                     {
-                        ts = now,
-                        type = "ForegroundChanged",
-                        payload = new { appKey = fg!.Value.AppKey, category = fg!.Value.Category }
-                    }, stoppingToken);
+                        ["appKey"] = fg!.Value.AppKey,
+                        ["category"] = fg!.Value.Category
+                    });
 
                     await Task.Delay(_pollInterval, stoppingToken);
                     continue;
@@ -95,17 +86,12 @@ public sealed class ApplicationUsageCollector : BackgroundService
                     var dwellMs = (long)(now - _currentSince).TotalMilliseconds;
                     if (dwellMs < 0) dwellMs = 0;
 
-                    await WriteEventAsync(new
+                    await WriteSignalAsync(SignalEventType.AppDwell, new Dictionary<string, string>
                     {
-                        ts = now,
-                        type = "AppDwell",
-                        payload = new
-                        {
-                            appKey = _current!.Value.AppKey,
-                            category = _current!.Value.Category,
-                            durationMs = dwellMs
-                        }
-                    }, stoppingToken);
+                        ["appKey"] = _current!.Value.AppKey,
+                        ["category"] = _current!.Value.Category,
+                        ["durationMs"] = dwellMs.ToString()
+                    });
 
                     // Switch bookkeeping
                     _switchesInWindow++;
@@ -114,12 +100,11 @@ public sealed class ApplicationUsageCollector : BackgroundService
                     _current = fg;
                     _currentSince = now;
 
-                    await WriteEventAsync(new
+                    await WriteSignalAsync(SignalEventType.ForegroundAppChanged, new Dictionary<string, string>
                     {
-                        ts = now,
-                        type = "ForegroundChanged",
-                        payload = new { appKey = fg!.Value.AppKey, category = fg!.Value.Category }
-                    }, stoppingToken);
+                        ["appKey"] = fg!.Value.AppKey,
+                        ["category"] = fg!.Value.Category
+                    });
                 }
 
                 await Task.Delay(_pollInterval, stoppingToken);
@@ -143,30 +128,18 @@ public sealed class ApplicationUsageCollector : BackgroundService
                 var now = DateTimeOffset.UtcNow;
                 var dwellMs = (long)(now - _currentSince).TotalMilliseconds;
 
-                await WriteEventAsync(new
+                await WriteSignalAsync(SignalEventType.AppDwell, new Dictionary<string, string>
                 {
-                    ts = now,
-                    type = "AppDwell",
-                    payload = new
-                    {
-                        appKey = _current!.Value.AppKey,
-                        category = _current!.Value.Category,
-                        durationMs = dwellMs,
-                        reason = "shutdown_flush"
-                    }
-                }, CancellationToken.None);
+                    ["appKey"] = _current!.Value.AppKey,
+                    ["category"] = _current!.Value.Category,
+                    ["durationMs"] = dwellMs.ToString(),
+                    ["reason"] = "shutdown_flush"
+                });
             }
         }
         catch { /* best-effort */ }
 
         _logger.LogInformation("ApplicationUsageCollector stopped.");
-    }
-
-    private async Task WriteEventAsync(object evt, CancellationToken ct)
-    {
-        // Keep it simple & compatible with JSONL spooling
-        var line = JsonSerializer.Serialize(evt);
-        await File.AppendAllTextAsync(_spoolPath, line + Environment.NewLine, ct);
     }
 
     private static ForegroundApp? TryGetForegroundApp()
