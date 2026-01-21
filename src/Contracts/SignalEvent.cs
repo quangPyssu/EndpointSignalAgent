@@ -37,7 +37,8 @@ public enum SignalEventType
     DisplayOn,
     DisplayOff,
     DisplayDimmed,
-
+    WifiSsidChanged,
+    PublicIpBucketChanged
 }
 
 public static class SignalEventTypeParser
