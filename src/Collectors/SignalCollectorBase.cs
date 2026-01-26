@@ -4,50 +4,21 @@ using System.Threading.Channels;
 
 namespace EndpointSignalAgent.Collectors;
 
-public abstract class SignalCollectorBase : BackgroundService, IDisposable
+public abstract class SignalCollectorBase : BackgroundService
 {
     private readonly string _spoolPath;
-    private static readonly Channel<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> _signalChannel = 
-        Channel.CreateBounded<(SignalEventType, Dictionary<string, string>, string)>(new BoundedChannelOptions(1000)
-        {
-            SingleWriter = false,
-            SingleReader = true,
-            FullMode = BoundedChannelFullMode.Wait
-        });
+    private readonly ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> _channelWriter;
 
-    private static readonly Task _writerTask;
-
-    static SignalCollectorBase()
-    {
-        _writerTask = Task.Run(async () =>
-        {
-            await foreach (var signal in _signalChannel.Reader.ReadAllAsync())
-            {
-                try
-                {
-                    using var writer = new SpoolFileCollector(signal.SpoolPath);
-                    await writer.WriteAsync(new SignalEvent(DateTimeOffset.UtcNow, signal.Type, new Dictionary<string, string>(signal.Payload)));
-                }
-                catch
-                {
-                    // Silent fail to prevent writer task from crashing
-                }
-            }
-        });
-    }
-
-    protected SignalCollectorBase(string spoolPath)
+    protected SignalCollectorBase(
+        string spoolPath,
+        ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> channelWriter)
     {
         _spoolPath = spoolPath;
+        _channelWriter = channelWriter;
     }
 
     protected async Task WriteSignalAsync(SignalEventType type, Dictionary<string, string> payload)
     {
-        await _signalChannel.Writer.WriteAsync((type, payload, _spoolPath));
-    }
-
-    public override void Dispose()
-    {
-        base.Dispose();
+        await _channelWriter.WriteAsync((type, payload, _spoolPath));
     }
 }

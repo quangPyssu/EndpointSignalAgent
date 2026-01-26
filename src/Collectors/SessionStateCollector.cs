@@ -1,4 +1,5 @@
 ﻿using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using EndpointSignalAgent.Contracts;
 using EndpointSignalAgent.Collectors;
 using Microsoft.Extensions.Logging;
@@ -13,8 +14,10 @@ public sealed class SessionStateCollector : SignalCollectorBase
 
     private DisplayStateListener? _displayListener;
 
-    public SessionStateCollector(ILogger<SessionStateCollector> logger)
-        : base(@"spool\signals.jsonl")
+    public SessionStateCollector(
+        ILogger<SessionStateCollector> logger,
+        ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> channelWriter)
+        : base(@"spool\signals.jsonl", channelWriter)
     {
         _logger = logger;
     }

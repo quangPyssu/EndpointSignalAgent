@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 public sealed class ApplicationUsageCollector : SignalCollectorBase
@@ -24,8 +25,10 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
     private int _switchesInWindow = 0;
     private DateTimeOffset _windowStart;
 
-    public ApplicationUsageCollector(ILogger<ApplicationUsageCollector> logger, string spoolPath = @"spool\signals.jsonl")
-        : base(spoolPath)
+    public ApplicationUsageCollector(
+        ILogger<ApplicationUsageCollector> logger,
+        ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> channelWriter)
+        : base(@"spool\signals.jsonl", channelWriter)
     {
         _logger = logger;
 

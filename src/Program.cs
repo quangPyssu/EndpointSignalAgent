@@ -30,6 +30,30 @@ builder.Services.AddOptions<AgentOptions>()
     .Validate(o => o.StatusPollSeconds is >= 1 and <= 3600, "Agent:StatusPollSeconds out of range")
     .ValidateOnStart();
 
+// Signal writer channel (for collectors)
+builder.Services.AddSingleton(sp =>
+{
+    return Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
+        new BoundedChannelOptions(1000)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleWriter = false,
+            SingleReader = true
+        });
+});
+
+builder.Services.AddSingleton(sp =>
+{
+    var channel = sp.GetRequiredService<Channel<(SignalEventType, Dictionary<string, string>, string)>>();
+    return channel.Reader;
+});
+
+builder.Services.AddSingleton(sp =>
+{
+    var channel = sp.GetRequiredService<Channel<(SignalEventType, Dictionary<string, string>, string)>>();
+    return channel.Writer;
+});
+
 // Queue A: outgoing batches
 builder.Services.AddSingleton(sp =>
 {
@@ -87,6 +111,7 @@ builder.Services.AddHostedService<EnrollOnStartupService>();
 
 
 // Hosted services
+builder.Services.AddHostedService<SignalWriterService>(); // Must start before collectors
 builder.Services.AddHostedService<SessionStateCollector>();
 builder.Services.AddHostedService<ApplicationUsageCollector>();
 builder.Services.AddHostedService<NetworkContextCollector>();

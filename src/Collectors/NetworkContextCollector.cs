@@ -9,6 +9,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Channels;
 
 /// <summary>
 /// Network/VPN context collector.
@@ -50,8 +51,10 @@ public sealed class NetworkContextCollector : SignalCollectorBase
 
     private static readonly string? _machineSalt = TryGetMachineGuid();
 
-    public NetworkContextCollector(ILogger<NetworkContextCollector> logger, string spoolPath = @"spool\signals.jsonl")
-        : base(spoolPath)
+    public NetworkContextCollector(
+        ILogger<NetworkContextCollector> logger,
+        ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> channelWriter)
+        : base(@"spool\signals.jsonl", channelWriter)
     {
         _logger = logger;
     }
