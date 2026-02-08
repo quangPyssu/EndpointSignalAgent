@@ -8,6 +8,7 @@ public sealed class BackendOptions
     public string EnrollPath { get; set; } = "/enroll";
     public string SendPath { get; set; } = "/send";
     public string StatusPath { get; set; } = "/status";
+    public string FeaturesPath { get; set; } = "/features";
     public int TimeoutSeconds { get; set; } = 30;
 
     public Uri GetBaseUri()
@@ -21,3 +22,4 @@ public sealed class BackendOptions
         return uri;
     }
 }
+

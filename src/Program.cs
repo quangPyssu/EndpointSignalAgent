@@ -30,7 +30,15 @@ builder.Services.AddOptions<AgentOptions>()
     .Validate(o => o.StatusPollSeconds is >= 1 and <= 3600, "Agent:StatusPollSeconds out of range")
     .ValidateOnStart();
 
+builder.Services.AddOptions<FeatureExtractorOptions>()
+    .Bind(builder.Configuration.GetSection("FeatureExtractor"))
+    .Validate(o => o.WindowSizeSeconds is >= 10 and <= 3600, "FeatureExtractor:WindowSizeSeconds out of range")
+    .Validate(o => o.WindowSlideSeconds is >= 5 and <= 3600, "FeatureExtractor:WindowSlideSeconds out of range")
+    .Validate(o => o.MaxEventsPerWindow is >= 100 and <= 100_000, "FeatureExtractor:MaxEventsPerWindow out of range")
+    .ValidateOnStart();
+
 // Signal writer channel (for collectors)
+// NOTE: Changed SingleReader to false to allow both SignalWriterService and FeatureExtractorService to consume
 builder.Services.AddSingleton(sp =>
 {
     return Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
@@ -38,7 +46,7 @@ builder.Services.AddSingleton(sp =>
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleWriter = false,
-            SingleReader = true
+            SingleReader = false
         });
 });
 
@@ -82,6 +90,9 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<IAgentState, AgentState>();
 builder.Services.AddSingleton<IAgentIdentity, AgentIdentity>();
 
+// Feature store
+builder.Services.AddSingleton<IFeatureStore, FeatureStore>();
+
 // Stub provider + stub decision handler
 //builder.Services.AddSingleton<ISignalProvider, HeartbeatSignalProvider>();
 builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
@@ -105,6 +116,15 @@ builder.Services.AddHttpClient<BackendClient>((sp, client) =>
     client.BaseAddress = new Uri(b.BaseUrl);
     client.Timeout = TimeSpan.FromSeconds(b.TimeoutSeconds);
 });
+
+// Named HttpClient for feature upload
+builder.Services.AddHttpClient("BackendClient", (sp, client) =>
+{
+    var b = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
+    client.BaseAddress = new Uri(b.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(b.TimeoutSeconds);
+});
+
 builder.Services.AddSingleton<EnrollmentStore>();
 builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
 builder.Services.AddHostedService<EnrollOnStartupService>();
@@ -112,6 +132,9 @@ builder.Services.AddHostedService<EnrollOnStartupService>();
 
 // Hosted services
 builder.Services.AddHostedService<SignalWriterService>(); // Must start before collectors
+builder.Services.AddHostedService<FeatureExtractorService>(); // Parallel consumer with SignalWriterService
+builder.Services.AddHostedService<FeatureUploadService>(); // Uploads unsent features to backend
+builder.Services.AddHostedService<FeatureCleanupService>(); // Cleans up old sent features
 builder.Services.AddHostedService<SessionStateCollector>();
 builder.Services.AddHostedService<ApplicationUsageCollector>();
 builder.Services.AddHostedService<NetworkContextCollector>();

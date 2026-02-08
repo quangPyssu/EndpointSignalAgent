@@ -66,21 +66,26 @@ public sealed class BackendClient
         try
         {
             _logger.LogDebug("Sending signal batch for device {DeviceId}", req.DeviceId);
-            
-            var resp = await _http.PostAsJsonAsync(_opts.SendPath, req, ct);
-            
-            if (!resp.IsSuccessStatusCode)
-            {
-                var errorContent = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Signal send failed with status {StatusCode}: {Error}", 
-                    (int)resp.StatusCode, errorContent);
-                throw new HttpRequestException($"Send failed status {(int)resp.StatusCode}: {errorContent}");
-            }
-            
-            var sendResp = await resp.Content.ReadFromJsonAsync<SignalBatchResponse>(cancellationToken: ct);
-            _logger.LogDebug("Signal batch sent, success={Success}", sendResp?.Success ?? false);
-            
-            return sendResp;
+            // Simulating send - actual backend call disabled
+            await Task.Delay(100, ct); // simulate network delay
+            _logger.LogDebug("Signal batch sent (simulated), success={Success}", true);
+            return new SignalBatchResponse(true);
+
+            // Actual backend send (disabled)
+            //var resp = await _http.PostAsJsonAsync(_opts.SendPath, req, ct);
+            //
+            //if (!resp.IsSuccessStatusCode)
+            //{
+            //    var errorContent = await resp.Content.ReadAsStringAsync(ct);
+            //    _logger.LogWarning("Signal send failed with status {StatusCode}: {Error}", 
+            //        (int)resp.StatusCode, errorContent);
+            //    throw new HttpRequestException($"Send failed status {(int)resp.StatusCode}: {errorContent}");
+            //}
+            //
+            //var sendResp = await resp.Content.ReadFromJsonAsync<SignalBatchResponse>(cancellationToken: ct);
+            //_logger.LogDebug("Signal batch sent, success={Success}", sendResp?.Success ?? false);
+            //
+            //return sendResp;
         }
         catch (HttpRequestException ex)
         {
