@@ -1,13 +1,16 @@
-using EndpointSignalAgent.Clients;
-using EndpointSignalAgent.Collectors;
-using EndpointSignalAgent.Configuration;
-using EndpointSignalAgent.Contracts;
-using EndpointSignalAgent.Handlers;
-using EndpointSignalAgent.Identity;
-using EndpointSignalAgent.Providers;
-using EndpointSignalAgent.Services;
-using EndpointSignalAgent.State;
-using Microsoft.Extensions.Hosting.WindowsServices;
+using EndpointSignalAgent.Bootstrap.Backend;
+using EndpointSignalAgent.Bootstrap.Configuration;
+using EndpointSignalAgent.Bootstrap.Identity;
+using EndpointSignalAgent.FeatureExtraction.Configuration;
+using EndpointSignalAgent.FeatureExtraction.Services;
+using EndpointSignalAgent.FeatureExtraction.Storage;
+using EndpointSignalAgent.Shared.Contracts;
+using EndpointSignalAgent.Shared.Handlers;
+using EndpointSignalAgent.Shared.Services;
+using EndpointSignalAgent.Shared.State;
+using EndpointSignalAgent.SignalCollection.Collectors;
+using EndpointSignalAgent.SignalCollection.Providers;
+using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.Options;
 using System.Threading.Channels;
 
@@ -15,7 +18,8 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddWindowsService(options => { options.ServiceName = "EndpointSignalAgent"; });
 
-// Options
+#region Configuration & Options
+
 builder.Services.AddOptions<BackendOptions>()
     .Bind(builder.Configuration.GetSection("Backend"))
     .Validate(o => !string.IsNullOrWhiteSpace(o.BaseUrl), "Backend:BaseUrl is required")
@@ -37,32 +41,50 @@ builder.Services.AddOptions<FeatureExtractorOptions>()
     .Validate(o => o.MaxEventsPerWindow is >= 100 and <= 100_000, "FeatureExtractor:MaxEventsPerWindow out of range")
     .ValidateOnStart();
 
-// Signal writer channel (for collectors)
-// NOTE: Changed SingleReader to false to allow both SignalWriterService and FeatureExtractorService to consume
-builder.Services.AddSingleton(sp =>
+#endregion
+
+#region Channels & Queues
+
+// Separate Signal Channels for Broadcast Pattern
+// SignalWriterService Channel
+var signalWriterChannel = Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
+    new BoundedChannelOptions(1000)
+    {
+        FullMode = BoundedChannelFullMode.Wait,
+        SingleWriter = false,
+        SingleReader = true
+    });
+
+// FeatureExtractorService Channel
+var featureExtractorChannel = Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
+    new BoundedChannelOptions(1000)
+    {
+        FullMode = BoundedChannelFullMode.Wait,
+        SingleWriter = false,
+        SingleReader = true
+    });
+
+// Register SignalBroadcaster (writes to both channels)
+builder.Services.AddSingleton<EndpointSignalAgent.SignalCollection.Broadcasting.ISignalBroadcaster>(sp =>
 {
-    return Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
-        new BoundedChannelOptions(1000)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = false,
-            SingleReader = false
-        });
+    var logger = sp.GetRequiredService<ILogger<EndpointSignalAgent.SignalCollection.Broadcasting.SignalBroadcaster>>();
+    var writers = new[]
+    {
+        signalWriterChannel.Writer,
+        featureExtractorChannel.Writer
+    };
+    
+    return new EndpointSignalAgent.SignalCollection.Broadcasting.SignalBroadcaster(logger, writers);
 });
 
-builder.Services.AddSingleton(sp =>
-{
-    var channel = sp.GetRequiredService<Channel<(SignalEventType, Dictionary<string, string>, string)>>();
-    return channel.Reader;
-});
+// Register readers for each consumer using wrapper interfaces
+builder.Services.AddSingleton<EndpointSignalAgent.SignalCollection.Broadcasting.ISignalWriterChannelReader>(
+    new EndpointSignalAgent.SignalCollection.Broadcasting.SignalWriterChannelReader(signalWriterChannel.Reader));
 
-builder.Services.AddSingleton(sp =>
-{
-    var channel = sp.GetRequiredService<Channel<(SignalEventType, Dictionary<string, string>, string)>>();
-    return channel.Writer;
-});
+builder.Services.AddSingleton<EndpointSignalAgent.FeatureExtraction.Broadcasting.IFeatureExtractorChannelReader>(
+    new EndpointSignalAgent.FeatureExtraction.Broadcasting.FeatureExtractorChannelReader(featureExtractorChannel.Reader));
 
-// Queue A: outgoing batches
+// Outgoing Signal Batches Queue
 builder.Services.AddSingleton(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
@@ -74,7 +96,7 @@ builder.Services.AddSingleton(sp =>
     });
 });
 
-// Queue B: incoming decisions/status
+// Incoming Decisions/Status Queue
 builder.Services.AddSingleton(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
@@ -86,19 +108,36 @@ builder.Services.AddSingleton(sp =>
     });
 });
 
-// Shared state + identity
-builder.Services.AddSingleton<IAgentState, AgentState>();
+#endregion
+
+#region Bootstrap: Identity & Backend
+
+// Identity & Enrollment
 builder.Services.AddSingleton<IAgentIdentity, AgentIdentity>();
+builder.Services.AddSingleton<EnrollmentStore>();
+builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
+builder.Services.AddHostedService<EnrollOnStartupService>();
 
-// Feature store
-builder.Services.AddSingleton<IFeatureStore, FeatureStore>();
+// Backend HTTP Clients
+builder.Services.AddHttpClient<BackendClient>((sp, client) =>
+{
+    var opts = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
+    client.BaseAddress = new Uri(opts.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
+});
 
-// Stub provider + stub decision handler
-//builder.Services.AddSingleton<ISignalProvider, HeartbeatSignalProvider>();
-builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
+builder.Services.AddHttpClient("BackendClient", (sp, client) =>
+{
+    var opts = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
+    client.BaseAddress = new Uri(opts.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
+});
 
-// Collectors
+#endregion
 
+#region SignalCollection: Collectors, Providers & Services
+
+// Signal Providers
 builder.Services.AddSingleton<ISignalProvider>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<SpoolFileSignalProvider>>();
@@ -108,41 +147,43 @@ builder.Services.AddSingleton<ISignalProvider>(sp =>
         logger: logger);
 });
 
-
-// Backend client
-builder.Services.AddHttpClient<BackendClient>((sp, client) =>
-{
-    var b = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
-    client.BaseAddress = new Uri(b.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(b.TimeoutSeconds);
-});
-
-// Named HttpClient for feature upload
-builder.Services.AddHttpClient("BackendClient", (sp, client) =>
-{
-    var b = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
-    client.BaseAddress = new Uri(b.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(b.TimeoutSeconds);
-});
-
-builder.Services.AddSingleton<EnrollmentStore>();
-builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
-builder.Services.AddHostedService<EnrollOnStartupService>();
-
-
-// Hosted services
-builder.Services.AddHostedService<SignalWriterService>(); // Must start before collectors
-builder.Services.AddHostedService<FeatureExtractorService>(); // Parallel consumer with SignalWriterService
-builder.Services.AddHostedService<FeatureUploadService>(); // Uploads unsent features to backend
-builder.Services.AddHostedService<FeatureCleanupService>(); // Cleans up old sent features
+// Signal Collectors
+builder.Services.AddHostedService<SignalWriterService>();
 builder.Services.AddHostedService<SessionStateCollector>();
 builder.Services.AddHostedService<ApplicationUsageCollector>();
 builder.Services.AddHostedService<NetworkContextCollector>();
 
+// Signal Processing Pipeline
 builder.Services.AddHostedService<BatchProducerService>();
 builder.Services.AddHostedService<BatchSendService>();
+
+#endregion
+
+#region FeatureExtraction: Storage & Services
+
+// Feature Storage
+builder.Services.AddSingleton<IFeatureStore, FeatureStore>();
+
+// Feature Services
+builder.Services.AddHostedService<FeatureExtractorService>();
+builder.Services.AddHostedService<FeatureUploadService>();
+builder.Services.AddHostedService<FeatureCleanupService>();
+
+#endregion
+
+#region Shared: State & Decision Processing
+
+// Shared State
+builder.Services.AddSingleton<IAgentState, AgentState>();
+
+// Decision Handlers
+builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
+
+// Status & Decision Services
 builder.Services.AddHostedService<StatusPollService>();
 builder.Services.AddHostedService<DecisionProcessorService>();
+
+#endregion
 
 var host = builder.Build();
 host.Run();
