@@ -41,6 +41,16 @@ public interface IFeatureStore
     /// Delete feature rows older than the specified date
     /// </summary>
     Task DeleteOlderThanAsync(DateTimeOffset cutoff, CancellationToken ct = default);
+
+    /// <summary>
+    /// Get all feature rows (both sent and unsent)
+    /// </summary>
+    Task<List<FeatureRow>> GetAllAsync(int limit = 10000, CancellationToken ct = default);
+
+    /// <summary>
+    /// Clear all feature rows from the database
+    /// </summary>
+    Task<int> ClearAllAsync(CancellationToken ct = default);
 }
 
 /// <summary>
@@ -376,6 +386,70 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to delete old feature rows");
+        }
+    }
+
+    public async Task<List<FeatureRow>> GetAllAsync(int limit = 10000, CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync(ct);
+
+            var sql = @"
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at
+                FROM feature_rows
+                ORDER BY window_start_ts ASC
+                LIMIT @limit
+            ";
+
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("@limit", limit);
+
+            var rows = new List<FeatureRow>();
+            using var reader = await command.ExecuteReaderAsync(ct);
+
+            while (await reader.ReadAsync(ct))
+            {
+                rows.Add(ReadFeatureRow(reader));
+            }
+
+            _logger.LogDebug("Retrieved {Count} total feature rows", rows.Count);
+            return rows;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve all feature rows");
+            return new List<FeatureRow>();
+        }
+    }
+
+    public async Task<int> ClearAllAsync(CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync(ct);
+
+            var sql = "DELETE FROM feature_rows";
+
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+
+            var deleted = await command.ExecuteNonQueryAsync(ct);
+            
+            _logger.LogWarning("Cleared all feature rows from database (deleted {Count} rows)", deleted);
+            return deleted;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to clear all feature rows");
+            throw;
         }
     }
 

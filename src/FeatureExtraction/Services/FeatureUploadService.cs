@@ -77,8 +77,11 @@ public sealed class FeatureUploadService : BackgroundService
 
                     _logger.LogInformation("Uploading {Count} unsent feature rows", unsentRows.Count);
 
+                    // demo simulate actual upload
                     // Send to backend
-                    var success = await SendFeatureBatchAsync(deviceId, unsentRows, stoppingToken);
+                    //var success = await SendFeatureBatchAsync(deviceId, unsentRows, stoppingToken);
+
+                    var success = true; // Simulate success
 
                     if (success)
                     {

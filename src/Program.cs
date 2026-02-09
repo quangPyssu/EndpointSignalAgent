@@ -168,6 +168,7 @@ builder.Services.AddSingleton<IFeatureStore, FeatureStore>();
 builder.Services.AddHostedService<FeatureExtractorService>();
 builder.Services.AddHostedService<FeatureUploadService>();
 builder.Services.AddHostedService<FeatureCleanupService>();
+builder.Services.AddHostedService<KeyboardCommandService>();
 
 #endregion
 
