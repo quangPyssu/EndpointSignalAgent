@@ -27,6 +27,10 @@ public sealed class FeatureExtractorService : BackgroundService
     private readonly List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> _windowBuffer;
     private DateTimeOffset _windowStart;
 
+    private readonly AppFeatureAggregator _appAggregator;
+    private readonly SessionFeatureAggregator _sessionAggregator;
+    private readonly NetworkFeatureAggregator _networkAggregator;
+
     public FeatureExtractorService(
         ILogger<FeatureExtractorService> logger,
         IFeatureExtractorChannelReader channelReader,
@@ -41,6 +45,10 @@ public sealed class FeatureExtractorService : BackgroundService
         _options = options;
         _windowBuffer = new List<(DateTimeOffset, SignalEventType, Dictionary<string, string>)>();
         _windowStart = DateTimeOffset.UtcNow;
+
+        _appAggregator = new AppFeatureAggregator();
+        _sessionAggregator = new SessionFeatureAggregator();
+        _networkAggregator = new NetworkFeatureAggregator();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -162,7 +170,7 @@ public sealed class FeatureExtractorService : BackgroundService
             eventsInWindow.Count, windowStart, windowEnd);
 
         // Extract features from the window
-        var features = ExtractFeatures(eventsInWindow);
+        var features = ExtractFeatures(eventsInWindow, windowStart, windowEnd);
 
         // Create and store the feature row with new schema
         var featureRow = FeatureRow.CreateNew(
@@ -180,11 +188,13 @@ public sealed class FeatureExtractorService : BackgroundService
     }
 
     /// <summary>
-    /// Extract features from a collection of signal events.
-    /// This is a base implementation - override or extend with domain-specific feature engineering.
+    /// Extract features from a collection of signal events using specialized aggregators.
+    /// Features are organized into three tables: app, session, and network.
     /// </summary>
     private Dictionary<string, object> ExtractFeatures(
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events)
+        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd)
     {
         var features = new Dictionary<string, object>();
 
@@ -192,71 +202,26 @@ public sealed class FeatureExtractorService : BackgroundService
         features["event_count"] = events.Count;
         features["unique_event_types"] = events.Select(e => e.Type).Distinct().Count();
 
-        // Event type distribution
-        var typeCounts = events.GroupBy(e => e.Type)
-            .ToDictionary(g => $"count_{g.Key}", g => g.Count());
-        
-        foreach (var (key, value) in typeCounts)
+        // Extract app features
+        var appFeatures = _appAggregator.ExtractFeatures(events, windowStart, windowEnd);
+        foreach (var (key, value) in appFeatures)
         {
             features[key] = value;
         }
 
-        // Time-based features
-        if (events.Count > 1)
+        // Extract session features
+        var sessionFeatures = _sessionAggregator.ExtractFeatures(events, windowStart, windowEnd);
+        foreach (var (key, value) in sessionFeatures)
         {
-            var timestamps = events.Select(e => e.Timestamp).OrderBy(t => t).ToList();
-            var intervals = new List<double>();
-
-            for (int i = 1; i < timestamps.Count; i++)
-            {
-                intervals.Add((timestamps[i] - timestamps[i - 1]).TotalSeconds);
-            }
-
-            if (intervals.Any())
-            {
-                features["avg_interval_seconds"] = intervals.Average();
-                features["max_interval_seconds"] = intervals.Max();
-                features["min_interval_seconds"] = intervals.Min();
-            }
+            features[key] = value;
         }
 
-        // Session state features (if applicable)
-        var sessionLocks = events.Count(e => e.Type == SignalEventType.SessionLock);
-        var sessionUnlocks = events.Count(e => e.Type == SignalEventType.SessionUnlock);
-        features["session_lock_count"] = sessionLocks;
-        features["session_unlock_count"] = sessionUnlocks;
-
-        // Application usage features
-        var appEvents = events.Where(e => e.Type == SignalEventType.ForegroundAppChanged).ToList();
-        if (appEvents.Any())
+        // Extract network features
+        var networkFeatures = _networkAggregator.ExtractFeatures(events, windowStart, windowEnd);
+        foreach (var (key, value) in networkFeatures)
         {
-            features["app_switch_count"] = appEvents.Count;
-            
-            // Unique applications in this window
-            var uniqueApps = appEvents
-                .Select(e => e.Payload.TryGetValue("app_name", out var name) ? name : "unknown")
-                .Distinct()
-                .Count();
-            features["unique_apps"] = uniqueApps;
+            features[key] = value;
         }
-
-        // Network context features
-        var networkEvents = events.Where(e => e.Type == SignalEventType.LocalNetworkChanged).ToList();
-        features["network_change_count"] = networkEvents.Count;
-
-        // Display state features
-        var displayOnCount = events.Count(e => e.Type == SignalEventType.DisplayOn);
-        var displayOffCount = events.Count(e => e.Type == SignalEventType.DisplayOff);
-        features["display_on_count"] = displayOnCount;
-        features["display_off_count"] = displayOffCount;
-
-        // TODO: Add more sophisticated feature extraction logic here
-        // Examples: 
-        // - Temporal patterns (time of day, day of week)
-        // - Sequential patterns
-        // - Behavioral anomalies
-        // - Context switches
-        // - Idle time analysis
 
         return features;
     }
