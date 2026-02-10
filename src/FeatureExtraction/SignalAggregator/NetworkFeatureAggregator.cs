@@ -54,18 +54,38 @@ public sealed class NetworkFeatureAggregator
         long vpnOnTimeMs = 0;
         long wifiUpTimeMs = 0;
 
+        // First pass: establish initial state from events before window start
+        foreach (var evt in networkEvents.Where(e => e.Timestamp < windowStart))
+        {
+            switch (evt.Type)
+            {
+                case SignalEventType.VpnStateChanged:
+                    if (evt.Payload.TryGetValue("vpnOn", out var vpnOnStr) &&
+                        bool.TryParse(vpnOnStr, out var vpnState))
+                    {
+                        vpnOn = vpnState;
+                    }
+                    break;
+
+                case SignalEventType.WifiLinkChanged:
+                case SignalEventType.WifiSsidChanged:
+                    if (evt.Payload.TryGetValue("wifiUp", out var wifiUpStr) &&
+                        bool.TryParse(wifiUpStr, out var wifiState))
+                    {
+                        wifiUp = wifiState;
+                    }
+                    break;
+            }
+        }
+
+        // Second pass: integrate state changes within the window
         DateTimeOffset lastTs = windowStart;
 
-        foreach (var evt in networkEvents)
+        foreach (var evt in networkEvents.Where(e => e.Timestamp >= windowStart))
         {
-            // Skip events before window start
-            if (evt.Timestamp < windowStart)
-                continue;
-
             // Process interval from lastTs to current event timestamp
-            var intervalStart = lastTs;
             var intervalEnd = evt.Timestamp > windowEnd ? windowEnd : evt.Timestamp;
-            var intervalMs = (long)(intervalEnd - intervalStart).TotalMilliseconds;
+            var intervalMs = (long)(intervalEnd - lastTs).TotalMilliseconds;
 
             if (intervalMs > 0)
             {

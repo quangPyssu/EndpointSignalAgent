@@ -65,6 +65,9 @@ public sealed class NetworkContextCollector : SignalCollectorBase
         Directory.CreateDirectory("spool");
         _logger.LogInformation("NetworkContextCollector started.");
 
+        // Emit initial state immediately at startup
+        await EmitInitialNetworkState(stoppingToken);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -146,6 +149,68 @@ public sealed class NetworkContextCollector : SignalCollectorBase
         }
 
         _logger.LogInformation("NetworkContextCollector stopped.");
+    }
+
+    private async Task EmitInitialNetworkState(CancellationToken ct)
+    {
+        try
+        {
+            var snap = SnapshotLocal();
+
+            _lastVpnOn = snap.VpnOn;
+            _lastVpnAdapterHash = snap.VpnAdapterHash;
+
+            await WriteSignalAsync(SignalEventType.VpnStateChanged, new Dictionary<string, string>
+            {
+                ["vpnOn"] = snap.VpnOn ? "true" : "false",
+                ["vpnAdapter"] = snap.VpnAdapterHash ?? "none",
+                ["initial"] = "true"
+            });
+
+            _lastWifiUp = snap.WifiUp;
+
+            await WriteSignalAsync(SignalEventType.WifiLinkChanged, new Dictionary<string, string>
+            {
+                ["wifiUp"] = snap.WifiUp ? "true" : "false",
+                ["initial"] = "true"
+            });
+
+            var ssidHash = TryGetWifiSsidHash();
+            _lastWifiSsidHash = ssidHash;
+
+            await WriteSignalAsync(SignalEventType.WifiSsidChanged, new Dictionary<string, string>
+            {
+                ["wifiSsid"] = ssidHash ?? "none",
+                ["wifiUp"] = snap.WifiUp ? "true" : "false",
+                ["initial"] = "true"
+            });
+
+            _lastLocalPrefixHash = snap.LocalPrefixHash;
+
+            await WriteSignalAsync(SignalEventType.LocalNetworkChanged, new Dictionary<string, string>
+            {
+                ["localPrefix"] = snap.LocalPrefixHash ?? "none",
+                ["initial"] = "true"
+            });
+
+            var publicBucketHash = await TryGetPublicIpBucketHashAsync(ct);
+            if (publicBucketHash is not null)
+            {
+                _lastPublicIpBucketHash = publicBucketHash;
+
+                await WriteSignalAsync(SignalEventType.PublicIpBucketChanged, new Dictionary<string, string>
+                {
+                    ["publicIpBucket"] = publicBucketHash,
+                    ["initial"] = "true"
+                });
+            }
+
+            _nextPublicIpPoll = DateTimeOffset.UtcNow + _publicIpPoll;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to emit initial network state");
+        }
     }
 
     private static (bool VpnOn, string? VpnAdapterHash, bool WifiUp, string? LocalPrefixHash) SnapshotLocal()

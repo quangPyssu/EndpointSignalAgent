@@ -23,15 +23,18 @@ public sealed class SessionStateCollector : SignalCollectorBase
         _logger = logger;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         Directory.CreateDirectory("spool");
 
         StartSessionWatcher();
         StartDisplayStateWatcher();
 
+        // Emit initial display state (best guess based on heuristics)
+        await EmitInitialDisplayState();
+
         // Run idle + screensaver sampler loop in the same service lifetime
-        return IdleAndScreenSaverLoop(stoppingToken);
+        await IdleAndScreenSaverLoop(stoppingToken);
     }
 
     private void StartSessionWatcher()
@@ -131,6 +134,9 @@ public sealed class SessionStateCollector : SignalCollectorBase
     {
         _logger.LogInformation("SessionStateCollector: idle/screensaver loop started");
 
+        // Emit initial idle and screensaver state
+        await EmitInitialIdleAndScreenSaverState();
+
         while (!ct.IsCancellationRequested)
         {
             try
@@ -194,6 +200,102 @@ public sealed class SessionStateCollector : SignalCollectorBase
         catch { /* ignore */ }
 
         return base.StopAsync(cancellationToken);
+    }
+
+    private async Task EmitInitialIdleAndScreenSaverState()
+    {
+        try
+        {
+            var idleMs = GetIdleMilliseconds();
+            var idleSec = (int)(idleMs / 1000);
+            var bucketSec = (idleSec / 5) * 5;
+
+            _lastIdleBucketSec = bucketSec;
+
+            await WriteSignalAsync(SignalEventType.IdleSample, new Dictionary<string, string>
+            {
+                ["idleMs"] = idleMs.ToString(),
+                ["idleBucketSec"] = bucketSec.ToString(),
+                ["initial"] = "true"
+            });
+
+            var ssRunning = TryGetScreenSaverRunning();
+            if (ssRunning.HasValue)
+            {
+                _lastScreenSaverRunning = ssRunning;
+
+                await WriteSignalAsync(
+                    ssRunning.Value ? SignalEventType.ScreenSaverOn : SignalEventType.ScreenSaverOff,
+                    new Dictionary<string, string>
+                    {
+                        ["running"] = ssRunning.Value ? "true" : "false",
+                        ["idleMs"] = idleMs.ToString(),
+                        ["idleBucketSec"] = bucketSec.ToString(),
+                        ["initial"] = "true"
+                    }
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to emit initial idle/screensaver state");
+        }
+    }
+
+    private async Task EmitInitialDisplayState()
+    {
+        try
+        {
+            var idleMs = GetIdleMilliseconds();
+            var ssRunning = TryGetScreenSaverRunning();
+
+            int initialState;
+            string stateReason;
+
+            if (ssRunning == true)
+            {
+                initialState = 0;
+                stateReason = "screensaver_running";
+            }
+            else if (idleMs < 30000)
+            {
+                initialState = 1;
+                stateReason = "recent_activity";
+            }
+            else
+            {
+                initialState = 1;
+                stateReason = "assumed_on";
+            }
+
+            _lastDisplayState = initialState;
+
+            var type = initialState switch
+            {
+                0 => SignalEventType.DisplayOff,
+                1 => SignalEventType.DisplayOn,
+                2 => SignalEventType.DisplayDimmed,
+                _ => SignalEventType.Unknown
+            };
+
+            await WriteSignalAsync(type, new Dictionary<string, string>
+            {
+                ["displayState"] = initialState switch
+                {
+                    0 => "Off",
+                    1 => "On",
+                    2 => "Dimmed",
+                    _ => "Unknown"
+                },
+                ["source"] = "initial_heuristic",
+                ["reason"] = stateReason,
+                ["initial"] = "true"
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to emit initial display state");
+        }
     }
 
     // ---- Screen saver state (polling) ----

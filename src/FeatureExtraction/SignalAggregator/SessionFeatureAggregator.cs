@@ -61,18 +61,55 @@ public sealed class SessionFeatureAggregator
         long idleGe60TimeMs = 0;
         int maxIdleBucketSec = 0;
 
+        // First pass: establish initial state from events before window start
+        foreach (var evt in sessionEvents.Where(e => e.Timestamp < windowStart))
+        {
+            switch (evt.Type)
+            {
+                case SignalEventType.SessionLock:
+                    isLocked = true;
+                    break;
+
+                case SignalEventType.SessionUnlock:
+                    isLocked = false;
+                    break;
+
+                case SignalEventType.DisplayOff:
+                case SignalEventType.DisplayDimmed:
+                    isDisplayOff = true;
+                    break;
+
+                case SignalEventType.DisplayOn:
+                    isDisplayOff = false;
+                    break;
+
+                case SignalEventType.ScreenSaverOn:
+                    isScreensaverOn = true;
+                    break;
+
+                case SignalEventType.ScreenSaverOff:
+                    isScreensaverOn = false;
+                    break;
+
+                case SignalEventType.IdleSample:
+                    if (evt.Payload.TryGetValue("idleBucketSec", out var idleBucketStr) &&
+                        int.TryParse(idleBucketStr, out var idleBucket))
+                    {
+                        currentIdleBucketSec = idleBucket;
+                        maxIdleBucketSec = Math.Max(maxIdleBucketSec, idleBucket);
+                    }
+                    break;
+            }
+        }
+
+        // Second pass: integrate state changes within the window
         DateTimeOffset lastTs = windowStart;
 
-        foreach (var evt in sessionEvents)
+        foreach (var evt in sessionEvents.Where(e => e.Timestamp >= windowStart))
         {
-            // Skip events before window start
-            if (evt.Timestamp < windowStart)
-                continue;
-
             // Process interval from lastTs to current event timestamp
-            var intervalStart = lastTs;
             var intervalEnd = evt.Timestamp > windowEnd ? windowEnd : evt.Timestamp;
-            var intervalMs = (long)(intervalEnd - intervalStart).TotalMilliseconds;
+            var intervalMs = (long)(intervalEnd - lastTs).TotalMilliseconds;
 
             if (intervalMs > 0)
             {
