@@ -1,6 +1,6 @@
 using EndpointSignalAgent.Shared.Contracts;
 
-namespace EndpointSignalAgent.FeatureExtraction.Services;
+namespace EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
 
 /// <summary>
 /// Aggregates session-related features from signal events based on the session_window_features schema.
@@ -34,17 +34,18 @@ public sealed class SessionFeatureAggregator
             .ToList();
 
         // Data quality indicators
-        var hasIdleData = events.Any(e => e.Type == SignalEventType.IdleSample);
-        var hasDisplayData = events.Any(e => e.Type == SignalEventType.DisplayOn || 
-                                             e.Type == SignalEventType.DisplayOff ||
-                                             e.Type == SignalEventType.DisplayDimmed);
+        var inWindow = events.Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd).ToList();
+
+        var hasIdleData = inWindow.Any(e => e.Type == SignalEventType.IdleSample);
+        var hasDisplayData = inWindow.Any(e => e.Type == SignalEventType.DisplayOn ||
+                                               e.Type == SignalEventType.DisplayOff ||
+                                               e.Type == SignalEventType.DisplayDimmed);
 
         features["has_idle_data"] = hasIdleData ? 1 : 0;
         features["has_display_data"] = hasDisplayData ? 1 : 0;
 
-        // lock_count: count of SessionLock events in window
-        var lockCount = events.Count(e => e.Type == SignalEventType.SessionLock);
-        features["lock_count"] = lockCount;
+        features["lock_count"] = inWindow.Count(e => e.Type == SignalEventType.SessionLock);
+
 
         // State integration: track state changes over time
         bool isLocked = false;

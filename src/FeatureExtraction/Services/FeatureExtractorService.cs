@@ -5,6 +5,7 @@ using EndpointSignalAgent.FeatureExtraction.Configuration;
 using EndpointSignalAgent.FeatureExtraction.Contracts;
 using EndpointSignalAgent.FeatureExtraction.Storage;
 using EndpointSignalAgent.Shared.Contracts;
+using EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -146,18 +147,23 @@ public sealed class FeatureExtractorService : BackgroundService
         var windowSize = TimeSpan.FromSeconds(_options.Value.WindowSizeSeconds);
         var windowStart = windowEnd - windowSize;
 
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> eventsInWindow;
+        // Keep 1 extra window as history so session/network ratios have carry-in state
+        var historyStart = windowStart - windowSize;
+
+        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> eventsContext;
 
         lock (_windowBuffer)
         {
-            // Get events within the current window
-            eventsInWindow = _windowBuffer
-                .Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd)
+            eventsContext = _windowBuffer
+                .Where(e => e.Timestamp >= historyStart && e.Timestamp <= windowEnd)
                 .ToList();
 
-            // Remove events older than the window
-            _windowBuffer.RemoveAll(e => e.Timestamp < windowStart);
+            _windowBuffer.RemoveAll(e => e.Timestamp < historyStart);
         }
+
+        var eventsInWindow = eventsContext
+            .Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd)
+            .ToList();
 
         if (eventsInWindow.Count == 0)
         {
@@ -166,11 +172,9 @@ public sealed class FeatureExtractorService : BackgroundService
             return;
         }
 
-        _logger.LogInformation("Extracting features from {Count} events in window {WindowStart} - {WindowEnd}",
-            eventsInWindow.Count, windowStart, windowEnd);
+        // Extract features
+        var features = ExtractFeatures(eventsContext, windowStart, windowEnd);
 
-        // Extract features from the window
-        var features = ExtractFeatures(eventsInWindow, windowStart, windowEnd);
 
         // Create and store the feature row with new schema
         var featureRow = FeatureRow.CreateNew(
@@ -192,37 +196,31 @@ public sealed class FeatureExtractorService : BackgroundService
     /// Features are organized into three tables: app, session, and network.
     /// </summary>
     private Dictionary<string, object> ExtractFeatures(
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events,
-        DateTimeOffset windowStart,
-        DateTimeOffset windowEnd)
+    List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> eventsContext,
+    DateTimeOffset windowStart,
+    DateTimeOffset windowEnd)
     {
+        var eventsInWindow = eventsContext
+            .Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd)
+            .ToList();
+
         var features = new Dictionary<string, object>();
 
-        // Basic count features
-        features["event_count"] = events.Count;
-        features["unique_event_types"] = events.Select(e => e.Type).Distinct().Count();
+        // Optional meta (harmless)
+        features["event_count"] = eventsInWindow.Count;
+        features["unique_event_types"] = eventsInWindow.Select(e => e.Type).Distinct().Count();
 
-        // Extract app features
-        var appFeatures = _appAggregator.ExtractFeatures(events, windowStart, windowEnd);
-        foreach (var (key, value) in appFeatures)
-        {
-            features[key] = value;
-        }
-
-        // Extract session features
-        var sessionFeatures = _sessionAggregator.ExtractFeatures(events, windowStart, windowEnd);
-        foreach (var (key, value) in sessionFeatures)
-        {
-            features[key] = value;
-        }
-
-        // Extract network features
-        var networkFeatures = _networkAggregator.ExtractFeatures(events, windowStart, windowEnd);
-        foreach (var (key, value) in networkFeatures)
-        {
-            features[key] = value;
-        }
+        MergeInto(features, _appAggregator.ExtractFeatures(eventsContext, windowStart, windowEnd));
+        MergeInto(features, _sessionAggregator.ExtractFeatures(eventsContext, windowStart, windowEnd));
+        MergeInto(features, _networkAggregator.ExtractFeatures(eventsContext, windowStart, windowEnd));
 
         return features;
     }
+
+    private static void MergeInto(Dictionary<string, object> dest, Dictionary<string, object> src)
+    {
+        foreach (var kv in src)
+            dest[kv.Key] = kv.Value; // overwrite on collision (last wins)
+    }
+
 }

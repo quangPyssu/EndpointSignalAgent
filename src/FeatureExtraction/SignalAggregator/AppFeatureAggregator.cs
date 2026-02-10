@@ -1,6 +1,6 @@
 using EndpointSignalAgent.Shared.Contracts;
 
-namespace EndpointSignalAgent.FeatureExtraction.Services;
+namespace EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
 
 /// <summary>
 /// Aggregates app-related features from signal events based on the app_window_features schema.
@@ -12,55 +12,57 @@ public sealed class AppFeatureAggregator
     /// Extract app features from events in a time window.
     /// </summary>
     public Dictionary<string, object> ExtractFeatures(
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events,
-        DateTimeOffset windowStart,
-        DateTimeOffset windowEnd)
+    List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events,
+    DateTimeOffset windowStart,
+    DateTimeOffset windowEnd)
     {
         var features = new Dictionary<string, object>();
         var windowDurationMs = (windowEnd - windowStart).TotalMilliseconds;
 
-        // Filter relevant events
-        var appSwitchEvents = events.Where(e => e.Type == SignalEventType.ForegroundAppChanged).ToList();
-        var appDwellEvents = events.Where(e => e.Type == SignalEventType.AppDwell).ToList();
+        // IMPORTANT: restrict counts to window
+        var inWindow = events.Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd).ToList();
 
-        // Data quality indicator
+        var appSwitchEvents = inWindow.Where(e => e.Type == SignalEventType.ForegroundAppChanged).ToList();
+        var appDwellEvents = inWindow.Where(e => e.Type == SignalEventType.AppDwell).ToList();
+
         features["has_app_data"] = (appSwitchEvents.Any() || appDwellEvents.Any()) ? 1 : 0;
-
-        // app_switch_count
         features["app_switch_count"] = appSwitchEvents.Count;
 
-        // Process dwell events for advanced features
         var appDwellSegments = new List<(string AppKey, string Category, long OverlapMs)>();
 
         foreach (var dwellEvent in appDwellEvents)
         {
             if (!dwellEvent.Payload.TryGetValue("durationMs", out var durationStr) ||
                 !long.TryParse(durationStr, out var durationMs))
-            {
                 continue;
-            }
 
             var appKey = dwellEvent.Payload.TryGetValue("appKey", out var key) ? key : "unknown";
-            var category = dwellEvent.Payload.TryGetValue("category", out var cat) ? cat : "other";
+            var rawCategory = dwellEvent.Payload.TryGetValue("category", out var cat) ? cat : "Other";
+            var category = NormalizeCategory(rawCategory);
 
-            // Compute segment boundaries: seg_end = event.ts, seg_start = event.ts - durationMs
             var segEnd = dwellEvent.Timestamp;
             var segStart = segEnd.AddMilliseconds(-durationMs);
 
-            // Calculate overlap with current window
             var overlapStart = segStart > windowStart ? segStart : windowStart;
             var overlapEnd = segEnd < windowEnd ? segEnd : windowEnd;
             var overlapMs = (long)Math.Max(0, (overlapEnd - overlapStart).TotalMilliseconds);
 
             if (overlapMs > 0)
-            {
                 appDwellSegments.Add((appKey, category, overlapMs));
-            }
         }
 
-        // app_unique_count: distinct appKey with dwell overlap > 0
-        var uniqueApps = appDwellSegments.Select(s => s.AppKey).Distinct().Count();
-        features["app_unique_count"] = uniqueApps;
+        // app_unique_count: if no dwell, fallback to switch distinct appKey (helps stability)
+        if (appDwellSegments.Any())
+        {
+            features["app_unique_count"] = appDwellSegments.Select(s => s.AppKey).Distinct().Count();
+        }
+        else
+        {
+            features["app_unique_count"] = appSwitchEvents
+                .Select(e => e.Payload.TryGetValue("appKey", out var k) ? k : "unknown")
+                .Distinct()
+                .Count();
+        }
 
         // Dwell statistics
         if (appDwellSegments.Any())
@@ -97,18 +99,37 @@ public sealed class AppFeatureAggregator
         }
 
         // Category ratio columns: cat_browser_ratio, cat_ide_ratio, cat_comms_ratio, cat_other_ratio
-        var categoryDwell = appDwellSegments.GroupBy(s => s.Category)
-            .ToDictionary(g => g.Key, g => g.Sum(s => s.OverlapMs));
+        var categoryDwell = appDwellSegments
+        .GroupBy(s => s.Category)
+        .ToDictionary(g => g.Key, g => g.Sum(s => s.OverlapMs));
 
-        var knownCategories = new[] { "browser", "ide", "comms", "other" };
-        foreach (var category in knownCategories)
-        {
-            var dwellMs = categoryDwell.GetValueOrDefault(category, 0);
-            var ratio = windowDurationMs > 0 ? dwellMs / windowDurationMs : 0.0;
-            features[$"cat_{category}_ratio"] = ratio;
-        }
+        double GetCatMs(string k) => categoryDwell.TryGetValue(k, out var v) ? v : 0;
+
+        var browserMs = GetCatMs("browser");
+        var ideMs = GetCatMs("ide");
+        var commsMs = GetCatMs("comms");
+
+        var otherMs = categoryDwell
+            .Where(kv => kv.Key != "browser" && kv.Key != "ide" && kv.Key != "comms")
+            .Sum(kv => kv.Value);
+
+        features["cat_browser_ratio"] = windowDurationMs > 0 ? browserMs / windowDurationMs : 0.0;
+        features["cat_ide_ratio"] = windowDurationMs > 0 ? ideMs / windowDurationMs : 0.0;
+        features["cat_comms_ratio"] = windowDurationMs > 0 ? commsMs / windowDurationMs : 0.0;
+        features["cat_other_ratio"] = windowDurationMs > 0 ? otherMs / windowDurationMs : 0.0;
 
         return features;
+    }
+
+    private static string NormalizeCategory(string raw)
+    {
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "browser" => "browser",
+            "ide" => "ide",
+            "comms" => "comms",
+            _ => "other"
+        };
     }
 
     private static double CalculateStandardDeviation(List<double> values)

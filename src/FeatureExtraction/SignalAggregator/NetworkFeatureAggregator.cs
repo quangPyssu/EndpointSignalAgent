@@ -1,6 +1,6 @@
 using EndpointSignalAgent.Shared.Contracts;
 
-namespace EndpointSignalAgent.FeatureExtraction.Services;
+namespace EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
 
 /// <summary>
 /// Aggregates network-related features from signal events based on the network_window_features schema.
@@ -31,20 +31,21 @@ public sealed class NetworkFeatureAggregator
             .ToList();
 
         // Data quality indicator
-        features["has_net_data"] = networkEvents.Any() ? 1 : 0;
+        var inWindow = events.Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd).ToList();
 
-        // Event counts
-        var vpnFlipCount = events.Count(e => e.Type == SignalEventType.VpnStateChanged);
-        var wifiFlipCount = events.Count(e => e.Type == SignalEventType.WifiLinkChanged);
-        var ssidChangeCount = events.Count(e => e.Type == SignalEventType.WifiSsidChanged);
-        var localPrefixChangeCount = events.Count(e => e.Type == SignalEventType.LocalNetworkChanged);
-        var publicIpBucketChangeCount = events.Count(e => e.Type == SignalEventType.PublicIpBucketChanged);
+        features["has_net_data"] = inWindow.Any(e =>
+            e.Type == SignalEventType.VpnStateChanged ||
+            e.Type == SignalEventType.WifiLinkChanged ||
+            e.Type == SignalEventType.WifiSsidChanged ||
+            e.Type == SignalEventType.LocalNetworkChanged ||
+            e.Type == SignalEventType.PublicIpBucketChanged) ? 1 : 0;
 
-        features["vpn_flip_count"] = vpnFlipCount;
-        features["wifi_flip_count"] = wifiFlipCount;
-        features["ssid_change_count"] = ssidChangeCount;
-        features["local_prefix_change_count"] = localPrefixChangeCount;
-        features["public_ip_bucket_change_count"] = publicIpBucketChangeCount;
+        features["vpn_flip_count"] = inWindow.Count(e => e.Type == SignalEventType.VpnStateChanged);
+        features["wifi_flip_count"] = inWindow.Count(e => e.Type == SignalEventType.WifiLinkChanged);
+        features["ssid_change_count"] = inWindow.Count(e => e.Type == SignalEventType.WifiSsidChanged);
+        features["local_prefix_change_count"] = inWindow.Count(e => e.Type == SignalEventType.LocalNetworkChanged);
+        features["public_ip_bucket_change_count"] = inWindow.Count(e => e.Type == SignalEventType.PublicIpBucketChanged);
+
 
         // State integration for VPN and WiFi
         bool vpnOn = false;
