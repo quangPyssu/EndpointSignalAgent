@@ -23,6 +23,13 @@ public sealed class BackendClient
 
     public async Task<string> EnrollAsync(string deviceName, CancellationToken ct)
     {
+        if (!_opts.UseBackend)
+        {
+            var simulatedId = Guid.NewGuid().ToString("D");
+            _logger.LogInformation("Enrollment simulated (Backend:UseBackend=false). DeviceId={DeviceId}", simulatedId);
+            return simulatedId;
+        }
+
         try
         {
             var req = new EnrollRequest(DeviceName: deviceName);
@@ -62,29 +69,31 @@ public sealed class BackendClient
 
     public async Task<SignalBatchResponse?> SendAsync(SignalBatchRequest req, CancellationToken ct)
     {
+        if (!_opts.UseBackend)
+        {
+            _logger.LogDebug("Sending signal batch for device {DeviceId} (simulated)", req.DeviceId);
+            await Task.Delay(100, ct);
+            _logger.LogDebug("Signal batch sent (simulated), success={Success}", true);
+            return new SignalBatchResponse(true);
+        }
+
         try
         {
             _logger.LogDebug("Sending signal batch for device {DeviceId}", req.DeviceId);
-            // Simulating send - actual backend call disabled
-            await Task.Delay(100, ct); // simulate network delay
-            _logger.LogDebug("Signal batch sent (simulated), success={Success}", true);
-            return new SignalBatchResponse(true);
+            var resp = await _http.PostAsJsonAsync(_opts.SendPath, req, ct);
 
-            // Actual backend send (disabled)
-            //var resp = await _http.PostAsJsonAsync(_opts.SendPath, req, ct);
-            //
-            //if (!resp.IsSuccessStatusCode)
-            //{
-            //    var errorContent = await resp.Content.ReadAsStringAsync(ct);
-            //    _logger.LogWarning("Signal send failed with status {StatusCode}: {Error}", 
-            //        (int)resp.StatusCode, errorContent);
-            //    throw new HttpRequestException($"Send failed status {(int)resp.StatusCode}: {errorContent}");
-            //}
-            //
-            //var sendResp = await resp.Content.ReadFromJsonAsync<SignalBatchResponse>(cancellationToken: ct);
-            //_logger.LogDebug("Signal batch sent, success={Success}", sendResp?.Success ?? false);
-            //
-            //return sendResp;
+            if (!resp.IsSuccessStatusCode)
+            {
+                var errorContent = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogWarning("Signal send failed with status {StatusCode}: {Error}",
+                    (int)resp.StatusCode, errorContent);
+                throw new HttpRequestException($"Send failed status {(int)resp.StatusCode}: {errorContent}");
+            }
+
+            var sendResp = await resp.Content.ReadFromJsonAsync<SignalBatchResponse>(cancellationToken: ct);
+            _logger.LogDebug("Signal batch sent, success={Success}", sendResp?.Success ?? false);
+
+            return sendResp;
         }
         catch (HttpRequestException ex)
         {
@@ -95,6 +104,14 @@ public sealed class BackendClient
 
     public async Task<StatusResponse?> PollStatusAsync(StatusRequest req, CancellationToken ct)
     {
+        if (!_opts.UseBackend)
+        {
+            await Task.Delay(50, ct);
+            var status = new StatusResponse(Status: "active");
+            _logger.LogDebug("Status poll (simulated) returned: {Status}", status.Status);
+            return status;
+        }
+
         try
         {
             _logger.LogDebug("Polling status for device {DeviceId}", req.DeviceId);

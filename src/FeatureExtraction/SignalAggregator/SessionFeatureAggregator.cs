@@ -61,8 +61,10 @@ public sealed class SessionFeatureAggregator
         long idleGe60TimeMs = 0;
         int maxIdleBucketSec = 0;
 
-        // First pass: establish initial state from events before window start
-        foreach (var evt in sessionEvents.Where(e => e.Timestamp < windowStart))
+        // First pass: establish initial state
+        // Priority 1: Look for initial state events (marked with "initial"="true")
+        var initialEvents = sessionEvents.Where(e => e.Payload.ContainsKey("initial")).ToList();
+        foreach (var evt in initialEvents)
         {
             switch (evt.Type)
             {
@@ -102,10 +104,55 @@ public sealed class SessionFeatureAggregator
             }
         }
 
+        // Priority 2: If no initial events, use most recent state before window start
+        if (initialEvents.Count == 0)
+        {
+            foreach (var evt in sessionEvents.Where(e => e.Timestamp < windowStart))
+            {
+                switch (evt.Type)
+                {
+                    case SignalEventType.SessionLock:
+                        isLocked = true;
+                        break;
+
+                    case SignalEventType.SessionUnlock:
+                        isLocked = false;
+                        break;
+
+                    case SignalEventType.DisplayOff:
+                    case SignalEventType.DisplayDimmed:
+                        isDisplayOff = true;
+                        break;
+
+                    case SignalEventType.DisplayOn:
+                        isDisplayOff = false;
+                        break;
+
+                    case SignalEventType.ScreenSaverOn:
+                        isScreensaverOn = true;
+                        break;
+
+                    case SignalEventType.ScreenSaverOff:
+                        isScreensaverOn = false;
+                        break;
+
+                    case SignalEventType.IdleSample:
+                        if (evt.Payload.TryGetValue("idleBucketSec", out var idleBucketStr) &&
+                            int.TryParse(idleBucketStr, out var idleBucket))
+                        {
+                            currentIdleBucketSec = idleBucket;
+                            maxIdleBucketSec = Math.Max(maxIdleBucketSec, idleBucket);
+                        }
+                        break;
+                }
+            }
+        }
+
         // Second pass: integrate state changes within the window
+        // Skip initial state events as they've already been processed
         DateTimeOffset lastTs = windowStart;
 
-        foreach (var evt in sessionEvents.Where(e => e.Timestamp >= windowStart))
+        foreach (var evt in sessionEvents.Where(e => e.Timestamp >= windowStart && !e.Payload.ContainsKey("initial")))
         {
             // Process interval from lastTs to current event timestamp
             var intervalEnd = evt.Timestamp > windowEnd ? windowEnd : evt.Timestamp;

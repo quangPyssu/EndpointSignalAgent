@@ -22,8 +22,8 @@ builder.Services.AddWindowsService(options => { options.ServiceName = "EndpointS
 
 builder.Services.AddOptions<BackendOptions>()
     .Bind(builder.Configuration.GetSection("Backend"))
-    .Validate(o => !string.IsNullOrWhiteSpace(o.BaseUrl), "Backend:BaseUrl is required")
-    .Validate(o => Uri.TryCreate(o.BaseUrl, UriKind.Absolute, out _), "Backend:BaseUrl must be an absolute URL")
+    .Validate(o => !o.UseBackend || !string.IsNullOrWhiteSpace(o.BaseUrl), "Backend:BaseUrl is required when Backend:UseBackend is true")
+    .Validate(o => !o.UseBackend || Uri.TryCreate(o.BaseUrl, UriKind.Absolute, out _), "Backend:BaseUrl must be an absolute URL when Backend:UseBackend is true")
     .ValidateOnStart();
 
 builder.Services.AddOptions<AgentOptions>()
@@ -122,15 +122,21 @@ builder.Services.AddHostedService<EnrollOnStartupService>();
 builder.Services.AddHttpClient<BackendClient>((sp, client) =>
 {
     var opts = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
-    client.BaseAddress = new Uri(opts.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
+    if (opts.UseBackend)
+    {
+        client.BaseAddress = new Uri(opts.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
+    }
 });
 
 builder.Services.AddHttpClient("BackendClient", (sp, client) =>
 {
     var opts = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
-    client.BaseAddress = new Uri(opts.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
+    if (opts.UseBackend)
+    {
+        client.BaseAddress = new Uri(opts.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
+    }
 });
 
 #endregion

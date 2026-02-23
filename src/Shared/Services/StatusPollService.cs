@@ -26,20 +26,11 @@ public sealed class StatusPollService(
             {
                 try
                 {
-                    // Simulating status poll - actual backend call disabled
-                    await Task.Delay(50, stoppingToken); // simulate network delay
-                    var status = new StatusResponse(Status: "active"); // simulated response
-                    logger.LogDebug("Status poll (simulated) returned: {Status}", status.Status);
-                    
+                    var req = new StatusRequest(DeviceId: deviceId);
+                    var status = await backend.PollStatusAsync(req, stoppingToken);
+
                     if (status is not null)
                         await decisionQueue.Writer.WriteAsync(status, stoppingToken);
-
-                    // Actual backend poll (disabled)
-                    //var req = new StatusRequest(DeviceId: deviceId);
-                    //var status = await backend.PollStatusAsync(req, stoppingToken);
-                    //
-                    //if (status is not null)
-                    //    await decisionQueue.Writer.WriteAsync(status, stoppingToken);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)

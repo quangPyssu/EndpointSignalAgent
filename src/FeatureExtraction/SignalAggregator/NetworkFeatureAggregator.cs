@@ -54,8 +54,10 @@ public sealed class NetworkFeatureAggregator
         long vpnOnTimeMs = 0;
         long wifiUpTimeMs = 0;
 
-        // First pass: establish initial state from events before window start
-        foreach (var evt in networkEvents.Where(e => e.Timestamp < windowStart))
+        // First pass: establish initial state
+        // Priority 1: Look for initial state events (marked with "initial"="true")
+        var initialEvents = networkEvents.Where(e => e.Payload.ContainsKey("initial")).ToList();
+        foreach (var evt in initialEvents)
         {
             switch (evt.Type)
             {
@@ -78,10 +80,38 @@ public sealed class NetworkFeatureAggregator
             }
         }
 
+        // Priority 2: If no initial events, use most recent state before window start
+        if (initialEvents.Count == 0)
+        {
+            foreach (var evt in networkEvents.Where(e => e.Timestamp < windowStart))
+            {
+                switch (evt.Type)
+                {
+                    case SignalEventType.VpnStateChanged:
+                        if (evt.Payload.TryGetValue("vpnOn", out var vpnOnStr) &&
+                            bool.TryParse(vpnOnStr, out var vpnState))
+                        {
+                            vpnOn = vpnState;
+                        }
+                        break;
+
+                    case SignalEventType.WifiLinkChanged:
+                    case SignalEventType.WifiSsidChanged:
+                        if (evt.Payload.TryGetValue("wifiUp", out var wifiUpStr) &&
+                            bool.TryParse(wifiUpStr, out var wifiState))
+                        {
+                            wifiUp = wifiState;
+                        }
+                        break;
+                }
+            }
+        }
+
         // Second pass: integrate state changes within the window
+        // Skip initial state events as they've already been processed
         DateTimeOffset lastTs = windowStart;
 
-        foreach (var evt in networkEvents.Where(e => e.Timestamp >= windowStart))
+        foreach (var evt in networkEvents.Where(e => e.Timestamp >= windowStart && !e.Payload.ContainsKey("initial")))
         {
             // Process interval from lastTs to current event timestamp
             var intervalEnd = evt.Timestamp > windowEnd ? windowEnd : evt.Timestamp;

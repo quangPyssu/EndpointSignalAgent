@@ -77,11 +77,9 @@ public sealed class FeatureUploadService : BackgroundService
 
                     _logger.LogInformation("Uploading {Count} unsent feature rows", unsentRows.Count);
 
-                    // demo simulate actual upload
-                    // Send to backend
-                    //var success = await SendFeatureBatchAsync(deviceId, unsentRows, stoppingToken);
-
-                    var success = true; // Simulate success
+                    var success = _backendOptions.Value.UseBackend
+                        ? await SendFeatureBatchAsync(deviceId, unsentRows, stoppingToken)
+                        : SimulateUpload(unsentRows.Count);
 
                     if (success)
                     {
@@ -118,6 +116,12 @@ public sealed class FeatureUploadService : BackgroundService
         }
 
         _logger.LogInformation("FeatureUploadService stopped");
+    }
+
+    private bool SimulateUpload(int count)
+    {
+        _logger.LogDebug("Feature upload simulated (Backend:UseBackend=false) for {Count} rows", count);
+        return true;
     }
 
     private async Task<bool> SendFeatureBatchAsync(

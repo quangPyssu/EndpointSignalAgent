@@ -4,6 +4,7 @@ public sealed class BackendOptions
 {
     public const string SectionName = "Backend";
 
+    public bool UseBackend { get; set; } = false;
     public string BaseUrl { get; set; } = string.Empty;
     public string EnrollPath { get; set; } = "/enroll";
     public string SendPath { get; set; } = "/send";
