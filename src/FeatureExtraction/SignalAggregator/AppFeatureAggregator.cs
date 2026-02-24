@@ -23,9 +23,8 @@ public sealed class AppFeatureAggregator
         var inWindow = events.Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd).ToList();
 
         var appSwitchEvents = inWindow.Where(e => e.Type == SignalEventType.ForegroundAppChanged).ToList();
-        var appDwellEvents = inWindow.Where(e => e.Type == SignalEventType.AppDwell).ToList();
+        var appDwellEvents = events.Where(e => e.Type == SignalEventType.AppDwell).ToList();
 
-        features["has_app_data"] = (appSwitchEvents.Any() || appDwellEvents.Any()) ? 1 : 0;
         features["app_switch_count"] = appSwitchEvents.Count;
 
         var appDwellSegments = new List<(string AppKey, string Category, long OverlapMs)>();
@@ -50,6 +49,8 @@ public sealed class AppFeatureAggregator
             if (overlapMs > 0)
                 appDwellSegments.Add((appKey, category, overlapMs));
         }
+
+        features["has_app_data"] = (appSwitchEvents.Any() || appDwellSegments.Any()) ? 1 : 0;
 
         // app_unique_count: if no dwell, fallback to switch distinct appKey (helps stability)
         if (appDwellSegments.Any())
@@ -113,10 +114,12 @@ public sealed class AppFeatureAggregator
             .Where(kv => kv.Key != "browser" && kv.Key != "ide" && kv.Key != "comms")
             .Sum(kv => kv.Value);
 
-        features["cat_browser_ratio"] = windowDurationMs > 0 ? browserMs / windowDurationMs : 0.0;
-        features["cat_ide_ratio"] = windowDurationMs > 0 ? ideMs / windowDurationMs : 0.0;
-        features["cat_comms_ratio"] = windowDurationMs > 0 ? commsMs / windowDurationMs : 0.0;
-        features["cat_other_ratio"] = windowDurationMs > 0 ? otherMs / windowDurationMs : 0.0;
+        var totalCategoryMs = browserMs + ideMs + commsMs + otherMs;
+
+        features["cat_browser_ratio"] = totalCategoryMs > 0 ? browserMs / totalCategoryMs : 0.0;
+        features["cat_ide_ratio"] = totalCategoryMs > 0 ? ideMs / totalCategoryMs : 0.0;
+        features["cat_comms_ratio"] = totalCategoryMs > 0 ? commsMs / totalCategoryMs : 0.0;
+        features["cat_other_ratio"] = totalCategoryMs > 0 ? otherMs / totalCategoryMs : 0.0;
 
         return features;
     }
