@@ -15,13 +15,16 @@ public sealed class KeyboardCommandService : BackgroundService
 {
     private readonly ILogger<KeyboardCommandService> _logger;
     private readonly IFeatureStore _featureStore;
+    private readonly FeatureExtractorService _featureExtractor;
 
     public KeyboardCommandService(
         ILogger<KeyboardCommandService> logger,
-        IFeatureStore featureStore)
+        IFeatureStore featureStore,
+        FeatureExtractorService featureExtractor)
     {
         _logger = logger;
         _featureStore = featureStore;
+        _featureExtractor = featureExtractor;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -39,6 +42,7 @@ public sealed class KeyboardCommandService : BackgroundService
             {
                 _logger.LogInformation("Keyboard monitoring started.");
                 Console.WriteLine("\n[Commands]");
+                Console.WriteLine("  Ctrl+E       - Extract features from all signals in signals.jsonl");
                 Console.WriteLine("  Ctrl+P       - Export unsent feature data to CSV");
                 Console.WriteLine("  Ctrl+O       - Export all feature data to CSV");
                 Console.WriteLine("  Ctrl+Shift+X - Clear all feature data from database\n");
@@ -49,8 +53,14 @@ public sealed class KeyboardCommandService : BackgroundService
                     {
                         var keyInfo = Console.ReadKey(intercept: true);
 
+                        // Check for Ctrl+E (extract features from all signals)
+                        if (keyInfo.Key == ConsoleKey.E && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+                        {
+                            _logger.LogInformation("Ctrl+E detected - extracting features from all signals...");
+                            await ExtractFeaturesFromAllSignalsAsync(ct);
+                        }
                         // Check for Ctrl+P (export unsent)
-                        if (keyInfo.Key == ConsoleKey.P && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+                        else if (keyInfo.Key == ConsoleKey.P && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
                         {
                             _logger.LogInformation("Ctrl+P detected - exporting unsent feature data...");
                             await ExportFeatureDataAsync(false, ct);
@@ -83,6 +93,34 @@ public sealed class KeyboardCommandService : BackgroundService
                 _logger.LogError(ex, "Error in keyboard monitoring");
             }
         }, ct);
+    }
+
+    private async Task ExtractFeaturesFromAllSignalsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var spoolPath = Path.Combine(Directory.GetCurrentDirectory(), "spool", "signals.jsonl");
+
+            if (!File.Exists(spoolPath))
+            {
+                _logger.LogWarning("Signal file not found: {SpoolPath}", spoolPath);
+                Console.WriteLine($"\n[Extract] Signal file not found: {spoolPath}\n");
+                return;
+            }
+
+            Console.WriteLine($"\n[Extract] Starting feature extraction from {spoolPath}...");
+
+            var startTime = DateTimeOffset.UtcNow;
+            await _featureExtractor.ExtractFeaturesFromFileAsync(spoolPath, ct);
+            var duration = DateTimeOffset.UtcNow - startTime;
+
+            Console.WriteLine($"[Extract] Feature extraction completed in {duration.TotalSeconds:F2} seconds\n");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to extract features from signals");
+            Console.WriteLine($"\n[Extract] Error: {ex.Message}\n");
+        }
     }
 
     private async Task ExportFeatureDataAsync(bool exportAll, CancellationToken ct)

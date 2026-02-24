@@ -743,6 +743,38 @@ decisionQueue.Writer.TryComplete();
 - `DefaultReportSeconds`: 1-3600
 - `StatusPollSeconds`: 1-3600
 
+### Feature Extractor Options
+**Section**: `FeatureExtractor`
+
+```json
+{
+  "FeatureExtractor": {
+    "Enabled": true,
+    "WindowSizeSeconds": 60,
+    "WindowSlideSeconds": 30,
+    "MaxEventsPerWindow": 1000
+  }
+}
+```
+
+**Properties**:
+- `Enabled` (bool): Controls whether live feature extraction is performed. When set to `false`, the FeatureExtractorService will start but immediately return without processing signals. Default: `true`
+- `WindowSizeSeconds` (int): Time window size in seconds for feature aggregation. Features are computed over this rolling window of signal events.
+- `WindowSlideSeconds` (int): How often to slide the window and extract features (in seconds). Determines the frequency of feature row generation.
+- `MaxEventsPerWindow` (int): Maximum number of events to buffer in memory per window to prevent memory exhaustion.
+
+**Validation**:
+- `WindowSizeSeconds`: 10-3600
+- `WindowSlideSeconds`: 5-3600
+- `MaxEventsPerWindow`: 100-100,000
+
+**Use Cases**:
+- Set `Enabled: false` to disable live feature extraction when:
+  - Running in a resource-constrained environment
+  - Testing signal collection without feature processing
+  - Temporarily pausing feature extraction without stopping the agent
+  - Using only historical batch processing instead of real-time extraction
+
 ---
 
 ## Error Handling & Resilience
@@ -764,6 +796,14 @@ decisionQueue.Writer.TryComplete();
 - ✅ Next poll attempts automatically
 - ✅ Channel buffering (drops old if full)
 - ⚠️ No persistence (decisions lost on restart)
+
+### Feature Extraction Resilience
+- ✅ Can be disabled via configuration (`Enabled: false`)
+- ✅ Service starts but returns immediately when disabled
+- ✅ Signal collection continues independently via broadcast pattern
+- ✅ Signals still written to `spool/signals.jsonl` for later processing
+- ✅ No impact on other services (BatchProducer, StatusPoll, etc.)
+- ⚠️ In-memory window buffer (not persisted across restarts)
 
 ### General Patterns
 1. **Catch-and-Continue**: Most errors logged but don't crash service

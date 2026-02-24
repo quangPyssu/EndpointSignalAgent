@@ -60,9 +60,15 @@ public sealed class FeatureExtractorService : BackgroundService
             return;
         }
 
+        if (!_options.Value.EnableLiveExtraction)
+        {
+            _logger.LogInformation("FeatureExtractorService: Live extraction is disabled (on-demand mode only)");
+            return;
+        }
+
         // Wait for device enrollment
         var deviceId = await _enrollment.GetIdAsync(stoppingToken);
-        
+
         _logger.LogInformation("FeatureExtractorService started for device {DeviceId} " +
             "(WindowSize: {WindowSize}s, Slide: {Slide}s)",
             deviceId, _options.Value.WindowSizeSeconds, _options.Value.WindowSlideSeconds);
@@ -221,6 +227,124 @@ public sealed class FeatureExtractorService : BackgroundService
     {
         foreach (var kv in src)
             dest[kv.Key] = kv.Value; // overwrite on collision (last wins)
+    }
+
+    /// <summary>
+    /// Extracts features from all signals in the specified jsonl file and stores them.
+    /// This method is designed for on-demand batch processing (e.g., via Ctrl+E).
+    /// </summary>
+    public async Task ExtractFeaturesFromFileAsync(string jsonlPath, CancellationToken ct)
+    {
+        _logger.LogInformation("Starting on-demand feature extraction from {Path}", jsonlPath);
+
+        if (!File.Exists(jsonlPath))
+        {
+            _logger.LogWarning("Signal file not found: {Path}", jsonlPath);
+            return;
+        }
+
+        // Get device ID
+        var deviceId = await _enrollment.GetIdAsync(ct);
+
+        // Read all signals from file
+        var allSignals = await ReadSignalsFromFileAsync(jsonlPath, ct);
+
+        if (allSignals.Count == 0)
+        {
+            _logger.LogInformation("No signals found in {Path}", jsonlPath);
+            return;
+        }
+
+        _logger.LogInformation("Read {Count} signals from file", allSignals.Count);
+
+        // Group signals into windows based on timestamp
+        var windowSize = TimeSpan.FromSeconds(_options.Value.WindowSizeSeconds);
+        var windowSlide = TimeSpan.FromSeconds(_options.Value.WindowSlideSeconds);
+
+        // Find time range
+        var minTime = allSignals.Min(s => s.Timestamp);
+        var maxTime = allSignals.Max(s => s.Timestamp);
+
+        _logger.LogInformation("Signal time range: {MinTime} to {MaxTime}", minTime, maxTime);
+
+        var windowCount = 0;
+        var currentWindowStart = minTime;
+
+        while (currentWindowStart <= maxTime)
+        {
+            var windowEnd = currentWindowStart + windowSize;
+            var historyStart = currentWindowStart - windowSize;
+
+            // Get events for this window (with history for context)
+            var eventsContext = allSignals
+                .Where(e => e.Timestamp >= historyStart && e.Timestamp <= windowEnd)
+                .ToList();
+
+            var eventsInWindow = eventsContext
+                .Where(e => e.Timestamp >= currentWindowStart && e.Timestamp <= windowEnd)
+                .ToList();
+
+            if (eventsInWindow.Count > 0)
+            {
+                // Extract features
+                var features = ExtractFeatures(eventsContext, currentWindowStart, windowEnd);
+
+                // Create and store feature row
+                var featureRow = FeatureRow.CreateNew(
+                    deviceId: deviceId,
+                    windowSec: _options.Value.WindowSizeSeconds,
+                    windowStartTs: currentWindowStart,
+                    featureVersion: "1.0",
+                    features: features
+                );
+
+                var id = await _featureStore.StoreAsync(featureRow, ct);
+                windowCount++;
+
+                _logger.LogDebug("Stored feature row {Id} for window {WindowStart} with {FeatureCount} features",
+                    id, currentWindowStart, features.Count);
+            }
+
+            // Slide to next window
+            currentWindowStart += windowSlide;
+        }
+
+        _logger.LogInformation("On-demand extraction complete: created {WindowCount} feature windows from {SignalCount} signals",
+            windowCount, allSignals.Count);
+    }
+
+    private async Task<List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)>> ReadSignalsFromFileAsync(
+        string jsonlPath, 
+        CancellationToken ct)
+    {
+        var signals = new List<(DateTimeOffset, SignalEventType, Dictionary<string, string>)>();
+
+        using var reader = new StreamReader(jsonlPath);
+        string? line;
+        var lineNumber = 0;
+
+        while ((line = await reader.ReadLineAsync(ct)) != null)
+        {
+            lineNumber++;
+
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            try
+            {
+                var signalEvent = System.Text.Json.JsonSerializer.Deserialize<SignalEvent>(line);
+                if (signalEvent != null)
+                {
+                    signals.Add((signalEvent.TimestampUtc, signalEvent.Type, signalEvent.Payload));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse signal at line {LineNumber}: {Line}", lineNumber, line);
+            }
+        }
+
+        return signals;
     }
 
 }

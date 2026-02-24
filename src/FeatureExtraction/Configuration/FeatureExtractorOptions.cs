@@ -25,5 +25,11 @@ public sealed class FeatureExtractorOptions
     /// <summary>
     /// Whether to extract features from the signal stream
     /// </summary>
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>
+    /// Whether to enable live feature extraction from the broadcast channel.
+    /// When false, features are only extracted on-demand (e.g., via Ctrl+E).
+    /// </summary>
+    public bool EnableLiveExtraction { get; set; } = true;
 }

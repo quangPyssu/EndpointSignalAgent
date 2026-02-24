@@ -170,8 +170,9 @@ builder.Services.AddHostedService<BatchSendService>();
 // Feature Storage
 builder.Services.AddSingleton<IFeatureStore, FeatureStore>();
 
-// Feature Services
-builder.Services.AddHostedService<FeatureExtractorService>();
+// Feature Services - FeatureExtractorService as Singleton for on-demand extraction
+builder.Services.AddSingleton<FeatureExtractorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FeatureExtractorService>());
 builder.Services.AddHostedService<FeatureUploadService>();
 builder.Services.AddHostedService<FeatureCleanupService>();
 builder.Services.AddHostedService<KeyboardCommandService>();
