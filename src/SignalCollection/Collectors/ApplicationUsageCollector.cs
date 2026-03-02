@@ -1,14 +1,10 @@
 ﻿using EndpointSignalAgent.Shared.Contracts;
+using EndpointSignalAgent.Shared.Utilities;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
-using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace EndpointSignalAgent.SignalCollection.Collectors;
 
@@ -165,7 +161,7 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
             try { fullPath = p.MainModule?.FileName; } catch { /* ignore */ }
 
             var appKey = HashStable(fullPath ?? exeName);
-            var category = Categorize(exeName);
+            var category = ApplicationCategorizer.Categorize(exeName);
 
             return new ForegroundApp(appKey, category);
         }
@@ -173,30 +169,6 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
         {
             return null;
         }
-    }
-
-    private static string Categorize(string exeName)
-    {
-        // Keep this tiny + effective: map common apps; fallback to "Other"
-        exeName = exeName.ToLowerInvariant();
-
-        // Browsers
-        if (exeName is "chrome" or "msedge" or "firefox" or "brave") return "Browser";
-
-        // IDE / Dev
-        if (exeName is "devenv" or "rider64" or "code" or "idea64" or "clion64") return "IDE";
-        if (exeName is "cmd" or "powershell" or "pwsh" or "windowsTerminal" or "wt") return "Terminal";
-
-        // Communication
-        if (exeName is "slack" or "teams" or "discord" or "zoom" or "skype") return "Comms";
-
-        // Office/Productivity
-        if (exeName is "winword" or "excel" or "powerpnt" or "onenote") return "Office";
-
-        // Media
-        if (exeName is "spotify" or "vlc" or "musicbee") return "Media";
-
-        return "Other";
     }
 
     private static string HashStable(string input)

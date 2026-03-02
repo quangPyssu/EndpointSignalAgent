@@ -3384,3 +3384,16 @@
 {"ts":"2026-02-26T15:13:59.6862335+00:00","type":"ForegroundAppChanged","payload":{"appKey":"8736C09D5F1D781A0A337D85","category":"Other"}}
 {"ts":"2026-02-26T15:14:04.9975317+00:00","type":"AppDwell","payload":{"appKey":"8736C09D5F1D781A0A337D85","category":"Other","durationMs":"5311"}}
 {"ts":"2026-02-26T15:14:04.9982973+00:00","type":"ForegroundAppChanged","payload":{"appKey":"C2BFDA65263095EF294E705A","category":"Other"}}
+{"ts":"2026-03-02T15:30:28.5985704+00:00","type":"DisplayOn","payload":{"displayState":"On","source":"GUID_CONSOLE_DISPLAY_STATE"}}
+{"ts":"2026-03-02T15:30:28.6104915+00:00","type":"DisplayOn","payload":{"displayState":"On","source":"initial_heuristic","reason":"recent_activity","initial":"true"}}
+{"ts":"2026-03-02T15:30:28.6112242+00:00","type":"IdleSample","payload":{"idleMs":"0","idleBucketSec":"0","initial":"true"}}
+{"ts":"2026-03-02T15:30:28.6116277+00:00","type":"ScreenSaverOff","payload":{"running":"false","idleMs":"0","idleBucketSec":"0","initial":"true"}}
+{"ts":"2026-03-02T15:30:28.6124271+00:00","type":"ForegroundAppChanged","payload":{"appKey":"D41B8EA013F2B47EB1401925","category":"Other"}}
+{"ts":"2026-03-02T15:30:28.6464494+00:00","type":"VpnStateChanged","payload":{"vpnOn":"false","vpnAdapter":"none","initial":"true"}}
+{"ts":"2026-03-02T15:30:28.6469951+00:00","type":"WifiLinkChanged","payload":{"wifiUp":"true","initial":"true"}}
+{"ts":"2026-03-02T15:30:28.6501118+00:00","type":"WifiSsidChanged","payload":{"wifiSsid":"8183FEC22234099618A7577E","wifiUp":"true","initial":"true"}}
+{"ts":"2026-03-02T15:30:28.6504994+00:00","type":"LocalNetworkChanged","payload":{"localPrefix":"E0894667BC0D8033C46E4A6A","initial":"true"}}
+{"ts":"2026-03-02T15:30:29.3668933+00:00","type":"AppDwell","payload":{"appKey":"D41B8EA013F2B47EB1401925","category":"Other","durationMs":"765"}}
+{"ts":"2026-03-02T15:30:29.3681055+00:00","type":"ForegroundAppChanged","payload":{"appKey":"8736C09D5F1D781A0A337D85","category":"Terminal"}}
+{"ts":"2026-03-02T15:30:30.1438482+00:00","type":"PublicIpBucketChanged","payload":{"publicIpBucket":"2C29083F3557EF2676E804AA","initial":"true"}}
+{"ts":"2026-03-02T15:30:30.7977864+00:00","type":"AppDwell","payload":{"appKey":"8736C09D5F1D781A0A337D85","category":"Terminal","durationMs":"1431","reason":"shutdown_flush"}}
