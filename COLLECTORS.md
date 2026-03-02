@@ -96,6 +96,13 @@ On shutdown, it unsubscribes session events and disposes display listener.
 
 **Location**: `src/SignalCollection/Collectors/NetworkContextCollector.cs`
 
+**Supporting components**:
+
+- `src/SignalCollection/Collectors/Network/NetworkContextAbstractions.cs`
+- `src/SignalCollection/Collectors/Network/NetworkContextModels.cs`
+- `src/SignalCollection/Collectors/Network/NetworkContextLogic.cs`
+- `src/SignalCollection/Collectors/Network/NetworkContextImplementations.cs`
+
 ### Signals emitted
 
 - `VpnStateChanged`
@@ -106,16 +113,72 @@ On shutdown, it unsubscribes session events and disposes display listener.
 
 ### Behavior summary
 
-- Local poll every `3s`; public IP poll every `60s`.
-- VPN state from adapter heuristics (`Tunnel` + keywords).
-- Wi-Fi SSID via `wlanapi.dll` + hash.
-- Local network fingerprint from hashed IPv4 `/24` bucket.
-- Public IP bucket from `https://api.ipify.org`, then coarse bucket + hash.
-- Uses optional machine-specific salt from registry `MachineGuid`.
+- Uses a modular pipeline (snapshot provider, primary interface resolver, route reader, RAS reader, WLAN reader, hashing service, clock).
+- Tick interval is `3s` (`PeriodicTimer`), with separate public IP refresh cadence (`60s`) and exponential backoff on failures.
+- Public IP providers are currently failover-based: `ipify` and `ifconfig.me`.
+- Network state changes are debounced with `SignalDebouncer<T>` before emission:
+  - minimum `2` consecutive samples or `6s` stability window.
+- Emits confidence and reason metadata alongside core values for VPN and Wi-Fi identity quality.
+
+### VPN decision model
+
+VPN state is produced by `VpnDecisionEngine` using multiple signals (not only adapter type):
+
+- Primary interface tunnel/PPP or known VPN adapter keywords.
+- Split-tunnel route pattern detection from route table.
+- Active RAS connections (`rasapi32`) as a strong signal.
+- Fallback heuristic on any up interface containing VPN-like naming.
+
+Payload includes `vpnOn`, `vpnAdapter`, `vpnConfidence`, `vpnReason`.
+
+### Wi-Fi identity model
+
+- Wi-Fi identity is computed only when primary interface is Wi-Fi and up.
+- Uses native WLAN API by interface GUID.
+- Emits hashed SSID and hashed BSSID (`wifiBssidHash`) when available.
+- Includes quality metadata:
+  - `wifiIdentityConfidence` (`high|medium|low`)
+  - `wifiIdentityReason` (`connected`, `disconnected`, `api_fail`, `not_wifi_primary`, etc.)
+
+### Local network fingerprint model
+
+`LocalNetworkFingerprintBuilder` emits:
+
+- `localPrefixHash` (`localPrefix`) from a coarse IP prefix.
+  - IPv4: `/24`
+  - IPv6: `/64`
+- `localNetworkHash` composite hash derived from prefix + gateway set + DNS set.
+- `localIpFamily` and `localNetworkReason`.
+
+### Public IP model
+
+- Public IP bucket is coarsened then hashed:
+  - IPv4 `/24`
+  - IPv6 `/48`
+- Payload includes:
+  - `publicIpBucket`
+  - `publicIpAgeSeconds`
+  - `publicIpFetchStatus` (`ok`, `fail`, `backoff`)
+
+### Hashing/salt behavior
+
+`HashingService` uses stable salt from `StableSaltProvider`:
+
+1. Windows `MachineGuid` when available.
+2. Persisted secret file (`ProgramData` fallback to `LocalAppData`) when `MachineGuid` unavailable.
+3. Last-resort machine/user fallback string.
+
+All published identity values are hashed; plaintext SSID/BSSID/IP are not emitted.
 
 ### Initial baseline behavior (current)
 
-Immediately emits initial network state (`initial=true`) for VPN, Wi-Fi link, SSID, local prefix, and public bucket (if fetch succeeds).
+On startup it forces a public IP attempt, initializes debouncers from first snapshot, and emits `initial=true` events for:
+
+- `VpnStateChanged`
+- `WifiLinkChanged`
+- `WifiSsidChanged`
+- `LocalNetworkChanged`
+- `PublicIpBucketChanged`
 
 ---
 

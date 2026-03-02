@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="EndpointSignalAgent.csproj" />
+  <Project Path="tests/EndpointSignalAgent.Tests/EndpointSignalAgent.Tests.csproj" />
 </Solution>
