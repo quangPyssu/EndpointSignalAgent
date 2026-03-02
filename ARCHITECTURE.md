@@ -2,902 +2,170 @@
 
 ## Overview
 
-The Endpoint Signal Agent is a background service that enrolls with a backend, collects signal events, sends batches to the backend, and polls for status decisions. The architecture follows a pipeline pattern with three main operational flows:
+The agent is a Windows Worker Service built on .NET 8. Runtime behavior is organized around four concurrent flows:
 
-1. **Enrollment Flow** - Device registration and identity establishment
-2. **Send Flow** - Signal collection, batching, and transmission
-3. **Status Flow** - Periodic status polling and decision processing
+1. **Enrollment**: obtain/persist device identity.
+2. **Signal ingestion**: collectors emit events into a broadcast pipeline.
+3. **Signal send**: spool reader batches and sends events to backend.
+4. **Status + decisions**: poll backend and process status decisions.
+
+Feature extraction runs in parallel as a side consumer of the same live signal stream.
 
 ---
 
-## System Architecture
-
-### Core Components
+## Runtime Topology (current)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Host Application                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌──────────────────┐         ┌──────────────────┐              │
-│  │ EnrollmentStore  │────────▶│ BackendClient    │              │
-│  │ (Singleton)      │         │ (HTTP Client)    │              │
-│  └────────┬─────────┘         └──────────────────┘              │
-│           │                                                       │
-│           │ Provides Device ID                                   │
-│           │                                                       │
-│  ┌────────▼─────────┐         ┌──────────────────┐              │
-│  │ BatchProducer    │────────▶│ Outgoing Channel │              │
-│  │ Service          │         │ (Queue A)        │              │
-│  └──────────────────┘         └────────┬─────────┘              │
-│                                         │                         │
-│                                         ▼                         │
-│                               ┌──────────────────┐               │
-│                               │ BatchSendService │               │
-│                               │                  │               │
-│                               └──────────────────┘               │
-│                                                                   │
-│  ┌──────────────────┐         ┌──────────────────┐              │
-│  │ StatusPoll       │────────▶│ Decision Channel │              │
-│  │ Service          │         │ (Queue B)        │              │
-│  └──────────────────┘         └────────┬─────────┘              │
-│                                         │                         │
-│                                         ▼                         │
-│                               ┌──────────────────┐               │
-│                               │ DecisionProc     │               │
-│                               │ Service          │               │
-│                               └──────────────────┘               │
-│                                                                   │
-└─────────────────────────────────────────────────────────────────┘
+Collectors (Application/Session/Network)
+        │
+        ▼
+  SignalCollectorBase.WriteSignalAsync()
+        │
+        ▼
+     ISignalBroadcaster
+      ├──────────────► Channel #1 (SignalWriter) ─► SignalWriterService ─► spool/signals.jsonl
+      └──────────────► Channel #2 (FeatureExtractor) ─► FeatureExtractorService (live)
+
+spool/signals.jsonl ─► SpoolFileSignalProvider ─► BatchProducerService ─► Channel<SignalBatchRequest> ─► BatchSendService ─► Backend
+
+Backend ─► StatusPollService ─► Channel<StatusResponse> ─► DecisionProcessorService ─► IDecisionHandler
 ```
 
-### Communication Channels
+---
 
-The system uses two bounded channels for inter-service communication:
+## Dependency Registration (`src/Program.cs`)
 
-- **Queue A (Outgoing)**: `Channel<SignalBatchRequest>`
-  - Capacity: Configurable (10-100,000, default from config)
-  - Single writer: `BatchProducerService`
-  - Single reader: `BatchSendService`
-  - Full mode: `DropOldest`
+### Channels
 
-- **Queue B (Decision)**: `Channel<StatusResponse>`
-  - Capacity: Configurable (10-100,000, default from config)
-  - Single writer: `StatusPollService`
-  - Single reader: `DecisionProcessorService`
-  - Full mode: `DropOldest`
+1. **Broadcast channels (fixed size 1000)**
+   - Payload: `(SignalEventType Type, Dictionary<string,string> Payload, string SpoolPath)`
+   - Full mode: `Wait`
+   - Multi-writer, single-reader.
+   - One channel for `SignalWriterService`, one for `FeatureExtractorService`.
+
+2. **Outgoing send queue**
+   - `Channel<SignalBatchRequest>`
+   - Capacity from `Agent:OutgoingQueueCapacity`
+   - Full mode: `DropOldest`
+   - Single-writer (`BatchProducerService`), single-reader (`BatchSendService`).
+
+3. **Decision queue**
+   - `Channel<StatusResponse>`
+   - Capacity from `Agent:DecisionQueueCapacity`
+   - Full mode: `DropOldest`
+   - Single-writer (`StatusPollService`), single-reader (`DecisionProcessorService`).
+
+### Hosted Services
+
+- `EnrollOnStartupService`
+- `SignalWriterService`
+- `SessionStateCollector`
+- `ApplicationUsageCollector`
+- `NetworkContextCollector`
+- `BatchProducerService`
+- `BatchSendService`
+- `FeatureExtractorService` (registered as singleton + hosted)
+- `FeatureUploadService`
+- `FeatureCleanupService`
+- `KeyboardCommandService`
+- `StatusPollService`
+- `DecisionProcessorService`
 
 ---
 
 ## Flow 1: Enrollment
 
-### Purpose
-Establish device identity with the backend. All other services wait for enrollment completion before operating.
+**Code**: `src/Bootstrap/Identity/EnrollmentStore.cs`
 
-### Components
+- `EnrollOnStartupService` calls `EnrollmentStore.Start(ct)` once.
+- Store first tries loading `spool/enrollment.json`.
+- If missing/invalid, it retries backend enrollment with exponential backoff:
+  - start 5s, multiplier 1.5x, max 60s.
+- Successful enrollment is persisted to `spool/enrollment.json`.
+- `GetIdAsync(ct)` awaits an internal `TaskCompletionSource<string>` used by dependent services.
 
-#### EnrollmentStore (Singleton)
-**Location**: [src/Identity/IEnrollmentStore.cs](src/Identity/IEnrollmentStore.cs)
-
-**Responsibility**: 
-- Manage device enrollment lifecycle
-- Persist and restore device ID
-- Provide blocking API for services to wait on enrollment
-
-**Key Methods**:
-- `Start(CancellationToken)` - Initiates enrollment process
-- `GetIdAsync(CancellationToken)` - Blocks until device ID is available
-
-#### EnrollOnStartupService (Hosted Service)
-**Location**: [src/Identity/IEnrollmentStore.cs](src/Identity/IEnrollmentStore.cs#L160)
-
-**Responsibility**: Trigger enrollment on application startup
-
-### Enrollment Flow Diagram
-
-```
-Application Startup
-       │
-       ▼
-┌──────────────────────┐
-│EnrollOnStartupService│
-│  ExecuteAsync()      │
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────┐
-│EnrollmentStore.Start()│
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────────────┐
-│Check enrollment.json exists? │
-└──────┬─────────────────┬─────┘
-       │                 │
-    YES│              NO │
-       ▼                 ▼
-┌─────────────┐   ┌───────────────────┐
-│Load from    │   │POST /api/enroll   │
-│file         │   │{name: hostname}   │
-└─────┬───────┘   └────────┬──────────┘
-      │                    │
-      │                    │ Retry loop with
-      │                    │ exponential backoff
-      │                    │ 5s → 7.5s → 11.25s
-      │                    │ → ... → 60s (max)
-      │                    │
-      │                    ▼
-      │            ┌───────────────────┐
-      │            │Receive DeviceId   │
-      │            │Save to file       │
-      │            └────────┬──────────┘
-      │                     │
-      └─────────┬───────────┘
-                ▼
-        ┌───────────────────┐
-        │ Set TCS Result    │
-        │ (deviceId)        │
-        └────────┬──────────┘
-                 │
-                 ▼
-        ┌────────────────────┐
-        │All GetIdAsync()    │
-        │awaits complete     │
-        └────────────────────┘
-```
-
-### Enrollment Details
-
-#### 1. Startup Trigger
-```csharp
-// Program.cs registration
-builder.Services.AddHostedService<EnrollOnStartupService>();
-
-// Service immediately calls Start()
-protected override Task ExecuteAsync(CancellationToken stoppingToken)
-{
-    _logger.LogInformation("Starting enrollment service");
-    _store.Start(stoppingToken);
-    return Task.CompletedTask;
-}
-```
-
-#### 2. Check Existing Enrollment
-- **File Path**: `spool/enrollment.json`
-- **Format**: 
-  ```json
-  {
-    "DeviceId": "device-uuid-string",
-    "EnrolledAt": "2026-01-20T10:30:00Z"
-  }
-  ```
-- If valid file exists, deviceId is loaded immediately
-- If file missing/invalid, proceed to enrollment
-
-#### 3. Backend Enrollment
-- **Endpoint**: `POST {BaseUrl}/api/enroll`
-- **Request**: 
-  ```json
-  {
-    "name": "MACHINE-NAME"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "id": "device-uuid-string"
-  }
-  ```
-
-#### 4. Retry Strategy
-- **Initial Delay**: 5 seconds
-- **Backoff Multiplier**: 1.5x
-- **Max Delay**: 60 seconds
-- **Retry Conditions**:
-  - Network errors (socket exceptions)
-  - HTTP errors (non-2xx status)
-  - Malformed responses
-- **No Retry Limit**: Continues until success or cancellation
-
-#### 5. TaskCompletionSource Pattern
-```csharp
-private readonly TaskCompletionSource<string> _tcs = 
-    new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-// Other services await this
-public Task<string> GetIdAsync(CancellationToken ct) => _tcs.Task.WaitAsync(ct);
-
-// Set once enrollment completes
-_tcs.TrySetResult(deviceId);
-```
-
-This allows all dependent services to block on `await enrollment.GetIdAsync()` until enrollment succeeds.
+`Backend:UseBackend=false` is supported: backend operations are simulated in `BackendClient`.
 
 ---
 
-## Flow 2: Signal Send
+## Flow 2: Signal Ingestion + Send
 
-### Purpose
-Collect signals from various providers, batch them, and reliably transmit to backend with retry logic.
+### Ingestion side
 
-### Components
+- Collectors call `WriteSignalAsync(...)` on `SignalCollectorBase`.
+- Base class forwards to `ISignalBroadcaster` (no direct file write in collectors).
+- Broadcaster writes every signal to both broadcast channels.
 
-#### BatchProducerService (Hosted Service)
-**Location**: [src/Services/BatchProducerService.cs](src/Services/BatchProducerService.cs)
+### Disk persistence side
 
-**Responsibility**:
-- Wait for enrollment completion
-- Periodically collect signals from all registered providers
-- Serialize signal batches to JSON
-- Write batches to outgoing channel
+- `SignalWriterService` reads the writer channel and appends JSONL records using `SpoolFileCollector`.
 
-#### BatchSendService (Hosted Service)
-**Location**: [src/Services/BatchSendService.cs](src/Services/BatchSendService.cs)
+### Send side
 
-**Responsibility**:
-- Wait for enrollment completion
-- Read batches from outgoing channel
-- Transmit to backend with exponential backoff retry
-- Handle transient failures gracefully
-
-#### Signal Providers
-**Location**: [src/Providers/](src/Providers/)
-
-**Implementations**:
-- `HeartbeatSignalProvider` - Periodic keepalive signals
-- `SpoolFileSignalProvider` - Reads signals from disk spool
-
-**Interface**:
-```csharp
-public interface ISignalProvider
-{
-    Task<IReadOnlyCollection<SignalEvent>> CollectAsync(CancellationToken ct);
-}
-```
-
-### Send Flow Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    BatchProducerService                          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │await enrollment      │
-                   │  .GetIdAsync()       │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Periodic Timer Loop   │
-                   │(DefaultReportSeconds)│
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Collect from all      │
-                   │SignalProviders       │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Serialize events      │
-                   │to JSON string        │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Create                │
-                   │SignalBatchRequest    │
-                   │{id, data}            │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Write to              │
-                   │Outgoing Channel      │
-                   └──────────┬───────────┘
-                              │
-                              │
-┌─────────────────────────────┼───────────────────────────────────┐
-│                    BatchSendService                              │
-└─────────────────────────────┼───────────────────────────────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │await enrollment      │
-                   │  .GetIdAsync()       │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Read from             │
-                   │Outgoing Channel      │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │POST /api/send        │
-                   │{id, data}            │
-                   └──────┬───────────────┘
-                          │
-                          │ Retry Loop
-                          │
-           ┌──────────────┼──────────────┐
-           │              │              │
-        SUCCESS        FAILURE      EXCEPTION
-           │              │              │
-           ▼              ▼              ▼
-    ┌──────────┐  ┌────────────┐ ┌────────────┐
-    │Reset     │  │Exponential │ │Exponential │
-    │backoff   │  │backoff     │ │backoff     │
-    │to 1s     │  │& retry     │ │& retry     │
-    └────┬─────┘  └────┬───────┘ └────┬───────┘
-         │             │              │
-         │             │              │
-         └─────────────┴──────────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │Next batch from  │
-              │channel          │
-              └─────────────────┘
-```
-
-### Send Flow Details
-
-#### 1. Producer: Signal Collection
-```csharp
-// Waits until enrolled
-var deviceId = await enrollment.GetIdAsync(stoppingToken);
-
-// Periodic loop
-while (!stoppingToken.IsCancellationRequested)
-{
-    // Collect from all providers
-    var events = new List<SignalEvent>(capacity: 8);
-    foreach (var provider in signalProviders)
-    {
-        var batch = await provider.CollectAsync(stoppingToken);
-        if (batch.Count > 0) 
-            events.AddRange(batch);
-    }
-    
-    // Serialize to JSON
-    var dataJson = JsonSerializer.Serialize(events);
-    
-    // Create batch request
-    var req = new SignalBatchRequest(
-        DeviceId: deviceId,
-        Data: dataJson
-    );
-    
-    // Write to channel (non-blocking)
-    await outgoingQueue.Writer.WriteAsync(req, stoppingToken);
-    
-    // Wait for next interval
-    var interval = state.GetReportSecondsOrDefault(
-        agentOptions.Value.DefaultReportSeconds
-    );
-    await Task.Delay(TimeSpan.FromSeconds(interval), stoppingToken);
-}
-```
-
-#### 2. Consumer: Batch Transmission
-```csharp
-// Waits until enrolled
-var id = await enrollment.GetIdAsync(stoppingToken);
-
-// Retry configuration
-var backoff = TimeSpan.FromSeconds(1);
-var backoffMax = TimeSpan.FromSeconds(30);
-
-// Process channel
-await foreach (var req in outgoingQueue.Reader.ReadAllAsync(stoppingToken))
-{
-    while (!stoppingToken.IsCancellationRequested)
-    {
-        try
-        {
-            var response = await backend.SendAsync(req, stoppingToken);
-            
-            if (response?.Success == true)
-            {
-                logger.LogDebug("Signal batch sent successfully");
-                backoff = TimeSpan.FromSeconds(1); // Reset
-                break; // Move to next batch
-            }
-            else
-            {
-                logger.LogWarning("Signal batch send returned success=false");
-                await Task.Delay(backoff, stoppingToken);
-                backoff = TimeSpan.FromSeconds(
-                    Math.Min(backoff.TotalSeconds * 2, backoffMax.TotalSeconds)
-                );
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Send failed; retrying in {delay}s", 
-                backoff.TotalSeconds);
-            await Task.Delay(backoff, stoppingToken);
-            backoff = TimeSpan.FromSeconds(
-                Math.Min(backoff.TotalSeconds * 2, backoffMax.TotalSeconds)
-            );
-        }
-    }
-}
-```
-
-#### 3. Backend Send API
-- **Endpoint**: `POST {BaseUrl}/api/send`
-- **Request**:
-  ```json
-  {
-    "id": "device-uuid",
-    "data": "[{\"type\":\"heartbeat\",\"timestamp\":\"2026-01-20T10:30:00Z\"}]"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true
-  }
-  ```
-
-#### 4. Retry Strategy (Send)
-- **Initial Backoff**: 1 second
-- **Backoff Multiplier**: 2x
-- **Max Backoff**: 30 seconds
-- **Retry on**:
-  - Any exception (network, HTTP, etc.)
-  - `Success: false` in response
-- **No Retry Limit**: Keeps retrying same batch until success
-
-#### 5. Channel Overflow Behavior
-- When channel is full: **Drops oldest batch**
-- This prevents memory exhaustion under backpressure
-- Newer data takes priority over old data
+- `SpoolFileSignalProvider` reads `spool/signals.jsonl` using byte-offset tracking in `spool/signals.offset`.
+- `BatchProducerService` collects provider output, serializes events, and enqueues `SignalBatchRequest`.
+- `BatchSendService` sends to backend with retry backoff (1s → 30s max, exponential x2).
 
 ---
 
-## Flow 3: Status Polling & Decision Processing
+## Flow 3: Status Poll + Decision Processing
 
-### Purpose
-Periodically check backend for device status and process decisions (allow/deny/challenge).
+**Code**:
+- Poller: `src/Shared/Services/StatusPollService.cs`
+- Processor: `src/Shared/Services/DecisionProcessorService.cs`
 
-### Components
-
-#### StatusPollService (Hosted Service)
-**Location**: [src/Services/StatusPollService.cs](src/Services/StatusPollService.cs)
-
-**Responsibility**:
-- Wait for enrollment completion
-- Periodically poll backend for device status
-- Write status responses to decision channel
-
-#### DecisionProcessorService (Hosted Service)
-**Location**: [src/Services/DecisionProcessorService.cs](src/Services/DecisionProcessorService.cs)
-
-**Responsibility**:
-- Read status responses from decision channel
-- Delegate to decision handler for processing
-
-#### IDecisionHandler
-**Location**: [src/Handlers/](src/Handlers/)
-
-**Implementations**:
-- `DefaultDecisionHandler` - Logs decisions (stub implementation)
-
-**Interface**:
-```csharp
-public interface IDecisionHandler
-{
-    void Handle(StatusResponse status);
-}
-```
-
-### Status Flow Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      StatusPollService                           │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │await enrollment      │
-                   │  .GetIdAsync()       │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Periodic Timer Loop   │
-                   │(StatusPollSeconds)   │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │POST /api/status      │
-                   │{id: deviceId}        │
-                   └──────┬───────────────┘
-                          │
-           ┌──────────────┼──────────────┐
-           │              │              │
-        SUCCESS       NON-NULL         ERROR
-           │              │              │
-           ▼              ▼              ▼
-    ┌──────────┐  ┌────────────┐ ┌────────────┐
-    │Got       │  │Got         │ │Log warning │
-    │Status    │  │Status      │ │Continue    │
-    │Response  │  │Response    │ └────┬───────┘
-    └────┬─────┘  └────┬───────┘      │
-         │             │               │
-         └──────┬──────┘               │
-                ▼                      │
-    ┌──────────────────────┐          │
-    │Write to              │          │
-    │Decision Channel      │          │
-    └──────────┬───────────┘          │
-               │                      │
-               └──────────┬───────────┘
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │Wait interval│
-                   │then repeat  │
-                   └─────────────┘
-
-
-┌─────────────────────────────────────────────────────────────────┐
-│                  DecisionProcessorService                        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Read from             │
-                   │Decision Channel      │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │handler.Handle(status)│
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Process based on      │
-                   │status value:         │
-                   │ - "allow"            │
-                   │ - "deny"             │
-                   │ - "challenge"        │
-                   │ - etc.               │
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │Back to channel read  │
-                   └──────────────────────┘
-```
-
-### Status Flow Details
-
-#### 1. Periodic Status Polling
-```csharp
-// Wait for enrollment
-var deviceId = await enrollment.GetIdAsync(stoppingToken);
-
-// Poll loop
-while (!stoppingToken.IsCancellationRequested)
-{
-    try
-    {
-        // Request status
-        var req = new StatusRequest(DeviceId: deviceId);
-        var status = await backend.PollStatusAsync(req, stoppingToken);
-        
-        // Write to channel if received
-        if (status is not null)
-            await decisionQueue.Writer.WriteAsync(status, stoppingToken);
-    }
-    catch (OperationCanceledException) { throw; }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Status poll failed");
-        // Continue anyway - next poll will retry
-    }
-    
-    // Wait for next poll interval
-    await Task.Delay(
-        TimeSpan.FromSeconds(agentOptions.Value.StatusPollSeconds), 
-        stoppingToken
-    );
-}
-```
-
-#### 2. Backend Status API
-- **Endpoint**: `POST {BaseUrl}/api/status`
-- **Request**:
-  ```json
-  {
-    "id": "device-uuid"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "status": "allow"
-  }
-  ```
-
-**Possible Status Values**:
-- `"allow"` - Device is allowed to operate normally
-- `"deny"` - Device should restrict operations
-- `"challenge"` - User authentication required
-- Custom backend-defined values
-
-#### 3. Decision Processing
-```csharp
-// Simple consumer loop
-await foreach (var status in decisionQueue.Reader.ReadAllAsync(stoppingToken))
-{
-    handler.Handle(status);
-}
-```
-
-#### 4. Decision Handler Implementation
-```csharp
-// Default implementation (stub)
-public class DefaultDecisionHandler : IDecisionHandler
-{
-    public void Handle(StatusResponse status)
-    {
-        _logger.LogInformation("Received status: {Status}", status.Status);
-        
-        // Future implementations might:
-        // - Update agent state
-        // - Trigger UI notifications
-        // - Lock/unlock system features
-        // - Initiate security responses
-    }
-}
-```
-
-#### 5. Error Handling
-- **Poll Failures**: Logged but don't stop polling
-- **No Retry Logic**: Waits for next scheduled poll
-- **Channel Full**: Drops oldest status (newer decisions take priority)
+- Poller waits for enrollment, calls backend status endpoint on interval, pushes non-null responses to decision queue.
+- Processor consumes queue and calls `IDecisionHandler.Handle(status)`.
 
 ---
 
-## Synchronization & Dependencies
+## Flow 4: Feature Extraction
 
-### Service Startup Order
-1. **EnrollOnStartupService** starts first
-2. **BatchProducerService** waits on `GetIdAsync()`
-3. **BatchSendService** waits on `GetIdAsync()`
-4. **StatusPollService** waits on `GetIdAsync()`
-5. **DecisionProcessorService** starts immediately (no enrollment dependency)
+**Code**: `src/FeatureExtraction/Services/FeatureExtractorService.cs`
 
-### Blocking Points
-All services that need device ID call:
-```csharp
-var deviceId = await enrollment.GetIdAsync(stoppingToken);
-```
+- Reads from dedicated feature channel (same signals as writer via broadcast).
+- Uses sliding windows:
+  - `WindowSizeSeconds`
+  - `WindowSlideSeconds`
+  - bounded by `MaxEventsPerWindow`.
+- Extracts features via app/session/network aggregators and stores `FeatureRow` entries.
+- Live extraction is gated by:
+  - `FeatureExtractor:Enabled`
+  - `FeatureExtractor:EnableLiveExtraction`.
 
-This blocks until:
-- Enrollment file is loaded, OR
-- Backend enrollment succeeds
-
-### Graceful Shutdown
-```csharp
-// All services respond to cancellation token
-while (!stoppingToken.IsCancellationRequested)
-{
-    // ... work ...
-}
-
-// Channels are completed on shutdown
-outgoingQueue.Writer.TryComplete();
-decisionQueue.Writer.TryComplete();
-```
+On-demand extraction from a JSONL file is also supported via `ExtractFeaturesFromFileAsync(...)`.
 
 ---
 
-## Configuration
+## Configuration (validated on startup)
 
-### Backend Options
-**Section**: `Backend`
+### Backend (`BackendOptions`)
+- `UseBackend`
+- `BaseUrl` (required absolute URL when `UseBackend=true`)
+- `TimeoutSeconds`
+- `EnrollPath`, `SendPath`, `StatusPath`
 
-```json
-{
-  "Backend": {
-    "BaseUrl": "http://localhost:8080",
-    "TimeoutSeconds": 30,
-    "EnrollPath": "/api/enroll",
-    "SendPath": "/api/send",
-    "StatusPath": "/api/status"
-  }
-}
-```
+### Agent (`AgentOptions`)
+- `OutgoingQueueCapacity` (10..100000)
+- `DecisionQueueCapacity` (10..100000)
+- `DefaultReportSeconds` (1..3600)
+- `StatusPollSeconds` (1..3600)
 
-### Agent Options
-**Section**: `Agent`
-
-```json
-{
-  "Agent": {
-    "OutgoingQueueCapacity": 1000,
-    "DecisionQueueCapacity": 100,
-    "DefaultReportSeconds": 60,
-    "StatusPollSeconds": 30
-  }
-}
-```
-
-**Validation**:
-- `OutgoingQueueCapacity`: 10-100,000
-- `DecisionQueueCapacity`: 10-100,000
-- `DefaultReportSeconds`: 1-3600
-- `StatusPollSeconds`: 1-3600
-
-### Feature Extractor Options
-**Section**: `FeatureExtractor`
-
-```json
-{
-  "FeatureExtractor": {
-    "Enabled": true,
-    "WindowSizeSeconds": 60,
-    "WindowSlideSeconds": 30,
-    "MaxEventsPerWindow": 1000
-  }
-}
-```
-
-**Properties**:
-- `Enabled` (bool): Controls whether live feature extraction is performed. When set to `false`, the FeatureExtractorService will start but immediately return without processing signals. Default: `true`
-- `WindowSizeSeconds` (int): Time window size in seconds for feature aggregation. Features are computed over this rolling window of signal events.
-- `WindowSlideSeconds` (int): How often to slide the window and extract features (in seconds). Determines the frequency of feature row generation.
-- `MaxEventsPerWindow` (int): Maximum number of events to buffer in memory per window to prevent memory exhaustion.
-
-**Validation**:
-- `WindowSizeSeconds`: 10-3600
-- `WindowSlideSeconds`: 5-3600
-- `MaxEventsPerWindow`: 100-100,000
-
-**Use Cases**:
-- Set `Enabled: false` to disable live feature extraction when:
-  - Running in a resource-constrained environment
-  - Testing signal collection without feature processing
-  - Temporarily pausing feature extraction without stopping the agent
-  - Using only historical batch processing instead of real-time extraction
+### Feature Extractor (`FeatureExtractorOptions`)
+- `Enabled`
+- `EnableLiveExtraction`
+- `WindowSizeSeconds` (10..3600)
+- `WindowSlideSeconds` (5..3600)
+- `MaxEventsPerWindow` (100..100000)
 
 ---
 
-## Error Handling & Resilience
+## Persistence Summary
 
-### Enrollment Resilience
-- ✅ Persists to disk (`spool/enrollment.json`)
-- ✅ Survives restarts (loads from disk)
-- ✅ Infinite retry with exponential backoff
-- ✅ Network failure tolerance
-
-### Send Resilience
-- ✅ Per-batch retry with exponential backoff
-- ✅ Channel buffering (drops old if full)
-- ✅ Network failure tolerance
-- ✅ Service restart continues from next batch
-
-### Status Resilience
-- ✅ Individual poll failures logged, not fatal
-- ✅ Next poll attempts automatically
-- ✅ Channel buffering (drops old if full)
-- ⚠️ No persistence (decisions lost on restart)
-
-### Feature Extraction Resilience
-- ✅ Can be disabled via configuration (`Enabled: false`)
-- ✅ Service starts but returns immediately when disabled
-- ✅ Signal collection continues independently via broadcast pattern
-- ✅ Signals still written to `spool/signals.jsonl` for later processing
-- ✅ No impact on other services (BatchProducer, StatusPoll, etc.)
-- ⚠️ In-memory window buffer (not persisted across restarts)
-
-### General Patterns
-1. **Catch-and-Continue**: Most errors logged but don't crash service
-2. **Exponential Backoff**: Prevents thundering herd on backend issues
-3. **Cancellation Tokens**: All async operations respect shutdown
-4. **TaskCompletionSource**: Elegant async coordination primitive
-
----
-
-## Data Flow Summary
-
-### On Startup
-```
-1. Host starts all BackgroundServices in parallel
-2. EnrollOnStartupService triggers EnrollmentStore.Start()
-3. EnrollmentStore checks file → network → sets TCS
-4. Other services unblock from GetIdAsync() await
-5. All services begin normal operation
-```
-
-### Steady State (Normal Operation)
-```
-┌─────────────┐
-│  Providers  │
-└──────┬──────┘
-       │ Signals
-       ▼
-┌──────────────┐     ┌───────────┐     ┌──────────┐
-│BatchProducer │────▶│ Channel A │────▶│BatchSend │────▶ Backend
-└──────────────┘     └───────────┘     └──────────┘
-                                                │
-                                                │ HTTP
-                                                │
-┌──────────────┐     ┌───────────┐     ┌───────▼──┐
-│DecisionProc  │◀────│ Channel B │◀────│StatusPoll│◀──── Backend
-└──────┬───────┘     └───────────┘     └──────────┘
-       │
-       ▼
-┌──────────────┐
-│DecisionHandle│
-└──────────────┘
-```
-
-### Data Persistence
-- **Enrollment**: Persisted to `spool/enrollment.json`
-- **Signals**: Collected from `spool/signals.jsonl` (SpoolFileSignalProvider)
-- **Offset**: Tracked in `spool/signals.offset`
-- **Status Decisions**: In-memory only (not persisted)
-
----
-
-## API Contracts
-
-### Enrollment
-```csharp
-// Request
-public sealed record EnrollRequest(
-    [property: JsonPropertyName("name")] string DeviceName
-);
-
-// Response
-public sealed record EnrollResponse(
-    [property: JsonPropertyName("id")] string DeviceId
-);
-```
-
-### Signal Batch
-```csharp
-// Request
-public sealed record SignalBatchRequest(
-    [property: JsonPropertyName("id")] string DeviceId,
-    [property: JsonPropertyName("data")] string Data  // JSON array of SignalEvents
-);
-
-// Response
-public sealed record SignalBatchResponse(
-    [property: JsonPropertyName("success")] bool Success
-);
-```
-
-### Status
-```csharp
-// Request
-public sealed record StatusRequest(
-    [property: JsonPropertyName("id")] string DeviceId
-);
-
-// Response
-public sealed record StatusResponse(
-    [property: JsonPropertyName("status")] string Status  // "allow", "deny", etc.
-);
-```
-
----
+- Enrollment: `spool/enrollment.json`
+- Signals: `spool/signals.jsonl`
+- Signal read offset: `spool/signals.offset`
+- Decisions: in-memory only (not persisted)
 
 ## Future Enhancements
 
