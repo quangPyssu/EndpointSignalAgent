@@ -202,14 +202,17 @@ internal sealed class WindowsRouteTableReader : IRouteTableReader
     {
         if (addr.si_family == AF_INET)
         {
-            var bytes = BitConverter.GetBytes(addr.Ipv4.sin_addr);
+            var bytes = BitConverter.GetBytes(addr.ipv4_addr);
             ip = new IPAddress(bytes);
             return true;
         }
 
         if (addr.si_family == AF_INET6)
         {
-            ip = new IPAddress(addr.Ipv6.sin6_addr, addr.Ipv6.sin6_scope_id);
+            Span<byte> bytes = stackalloc byte[16];
+            BitConverter.GetBytes(addr.ipv6_addr0).CopyTo(bytes[..8]);
+            BitConverter.GetBytes(addr.ipv6_addr1).CopyTo(bytes[8..]);
+            ip = new IPAddress(bytes, addr.ipv6_scope_id);
             return true;
         }
 
@@ -260,39 +263,19 @@ internal sealed class WindowsRouteTableReader : IRouteTableReader
         public byte PrefixLength;
     }
 
-    [StructLayout(LayoutKind.Explicit)]
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct SOCKADDR_INET
     {
-        [FieldOffset(0)]
-        public SOCKADDR_IN Ipv4;
-        [FieldOffset(0)]
-        public SOCKADDR_IN6 Ipv6;
-        [FieldOffset(0)]
+        // 28-byte union-safe shape of sockaddr_in/sockaddr_in6.
         public short si_family;
-    }
+        public ushort sin_port_or_port;
+        public uint ipv4_addr_or_flowinfo;
+        public ulong ipv4_zero_or_ipv6_addr0;
+        public ulong ipv6_addr1;
+        public uint ipv6_scope_id;
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SOCKADDR_IN
-    {
-        public short sin_family;
-        public ushort sin_port;
-        public uint sin_addr;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
-        public byte[] sin_zero;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SOCKADDR_IN6
-    {
-        public short sin6_family;
-        public ushort sin6_port;
-        public uint sin6_flowinfo;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-        public byte[] sin6_addr;
-
-        public uint sin6_scope_id;
+        public uint ipv4_addr => ipv4_addr_or_flowinfo;
+        public ulong ipv6_addr0 => ipv4_zero_or_ipv6_addr0;
     }
 }
 
