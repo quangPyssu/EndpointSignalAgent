@@ -176,23 +176,161 @@ Payload fields:
 - `ScreenSaverOn`, `ScreenSaverOff`
 - `DisplayOn`, `DisplayOff`, `DisplayDimmed`
 
-### Behavior summary
+### Architecture
 
-Runs three mechanisms in one service lifetime:
+Uses a **signal queue pattern** with:
+- **Unbounded channel**: Single-reader, multi-writer for all signal emissions
+- **Background queue pump**: Processes queued signals asynchronously via `WriteSignalAsync`
+- **Debounced state tracking**: All state changes (session lock, display, screensaver, presence) use `DebouncedStateTracker<T>` with:
+  - `2` consecutive confirmations required, **OR**
+  - `2s` settle time elapsed
 
-1. `SystemEvents.SessionSwitch` for lock/unlock events.
-2. Hidden window message pump for display power broadcast events.
-3. Poll loop every `2s` for idle bucket + screensaver transitions.
+### Event sources
+
+#### Session lock/unlock (dual path)
+1. **Primary**: `SessionEventWindowListener` hidden window receiving `WM_WTSSESSION_CHANGE` messages
+   - Handles `WTS_SESSION_LOCK` (0x7) and `WTS_SESSION_UNLOCK` (0x8)
+   - Sets `source=WTS` in payload
+2. **Fallback**: `SystemEvents.SessionSwitch` (.NET event wrapper)
+   - Handles `SessionLock` and `SessionUnlock` reasons
+   - Sets `source=SystemEvents` in payload
+   - **Deduplication**: Suppressed if WTS event received within last `3s` (WTS preferred)
+
+#### Display state (power broadcast)
+Via `SessionEventWindowListener` registered for two power setting GUIDs:
+1. **`GUID_CONSOLE_DISPLAY_STATE`** (`6FE69556-704A-47A0-8F24-C28D936FDA47`):
+   - `0` = Off, `1` = On, `2` = Dimmed
+   - Sets `source=GUID_CONSOLE_DISPLAY_STATE`
+2. **`GUID_MONITOR_POWER_ON`** (`02731015-4510-4526-99E6-E5A17EBD1AEA`):
+   - `0` = monitor off, `1` = monitor on
+   - Mapped to `0` (Off) or `1` (On) display state
+   - Sets `source=GUID_MONITOR_POWER_ON`
+
+All display events set `confidence=high` when emitted from power broadcasts.
+
+#### User presence tracking
+Via `SessionEventWindowListener` registered for `GUID_SESSION_USER_PRESENCE` (`3C0F4548-C03F-4C4D-B9F2-237EDE686376`):
+- `0` = `present`
+- `1` = `away`
+- Debounced before updating internal `_userPresence` field
+- Emits `IdleSample` with `idleStatus=presence_update` when presence changes
+- Attaches `userPresence` and `presenceSource=GUID_SESSION_USER_PRESENCE` to subsequent `IdleSample` and `DisplayOn/Off/Dimmed` signals
+
+#### Idle time and screensaver (polling)
+Poll loop with **adaptive cadence**:
+- **Normal**: `2s` interval
+- **Reduced**: `30s` interval when session locked **OR** user presence is `away`
+
+Idle time via `GetLastInputInfo` Win32 API (`user32.dll`).
+Screensaver state via `SystemParametersInfo` with `SPI_GETSCREENSAVERRUNNING` (114).
+
+### Signal emission details
+
+#### `SessionLock` / `SessionUnlock`
+Payload fields:
+- `source` (`WTS` or `SystemEvents`)
+- `reason` (e.g., `WTS_SESSION_LOCK`, `SessionLock`, `SessionUnlock`)
+
+Debounced via `_sessionLockDebouncer` (2 confirmations or 2s settle time).
+Updates internal `_isSessionLocked` state for adaptive polling cadence.
+
+#### `IdleSample`
+Emitted when idle bucket changes (adaptive bucketing):
+- `<120s`: `5s` buckets
+- `120-600s`: `15s` buckets
+- `>600s`: `60s` buckets
+
+Payload fields (normal):
+- `idleMs` (milliseconds since last input)
+- `idleBucketSec` (bucketed idle time in seconds)
+- `idleStatus` (`ok` or `api_fail`)
+- `userPresence` (if available, e.g., `present`, `away`)
+- `presenceSource` (if available, e.g., `GUID_SESSION_USER_PRESENCE`)
+
+Payload fields (presence update special case):
+- `idleMs` = `-1`
+- `idleBucketSec` = `-1`
+- `idleStatus` = `presence_update`
+- `userPresence` (new presence state)
+- `presenceSource` (source of presence change)
+
+Payload fields (screensaver API failure):
+- `idleMs` = `-1`
+- `idleBucketSec` = `-1`
+- `idleStatus` = `ok`
+- `screensaverStatus` = `api_fail`
+
+#### `ScreenSaverOn` / `ScreenSaverOff`
+Payload fields:
+- `running` (`true` or `false`)
+- `screensaverStatus` (`ok`)
+
+Debounced via `_screenSaverDebouncer` (2 confirmations or 2s settle time).
+
+#### `DisplayOn` / `DisplayOff` / `DisplayDimmed`
+Payload fields:
+- `displayState` (`On`, `Off`, or `Dimmed`)
+- `source` (e.g., `GUID_CONSOLE_DISPLAY_STATE`, `GUID_MONITOR_POWER_ON`, `initial_unknown`)
+- `confidence` (`high` for power broadcasts, `low` for initial state)
+- `reason` (optional, e.g., `no_power_event_yet` for initial state)
+- `userPresence` (if available)
+- `presenceSource` (if available)
+
+Debounced via `_displayDebouncer` (2 confirmations or 2s settle time).
+
+### `DebouncedStateTracker<T>` logic
+
+Generic state transition tracker used for all debouncing:
+
+1. **First observation**: Immediately commits to stable state
+2. **Matching observation**: Resets candidate (no-op)
+3. **New observation**: Starts candidate tracking with 1 confirmation
+4. **Repeated observation**: Increments confirmation count
+5. **Commit criteria**:
+   - Confirmation count ≥ `confirmationsRequired`, **OR**
+   - Time elapsed ≥ `settleTime`
+6. **On commit**: Updates stable state and returns `true` (triggers emission)
+
+### `SessionEventWindowListener` implementation
+
+- **Thread model**: Dedicated STA background thread with Windows message loop
+- **Window class**: Message-only window (`HWND_MESSAGE = -3`)
+- **Registration**:
+  - `RegisterPowerSettingNotification` for three GUIDs (display state, monitor power, user presence)
+  - `WTSRegisterSessionNotification` for session lock/unlock events (`NOTIFY_FOR_THIS_SESSION = 0`)
+- **Message handling**:
+  - `WM_POWERBROADCAST` (0x0218) with `PBT_POWERSETTINGCHANGE` (0x8013) → parses `POWERBROADCAST_SETTING` structure
+  - `WM_WTSSESSION_CHANGE` (0x02B1) → parses wParam for lock/unlock reason code
+  - `WM_CLOSE` (0x0010) → posts quit message to exit message loop
+- **Lifecycle**:
+  - `Start()`: Spawns thread, waits up to 3s for readiness signal
+  - `Dispose()`: Posts `WM_CLOSE`, joins thread with 2s timeout, unregisters all handles
 
 ### Initial baseline behavior (current)
 
-On startup, it emits:
+On startup, `ExecuteAsync` emits:
 
-- Initial display state (`source=initial_heuristic`, `initial=true`)
-- Initial idle sample (`initial=true`)
-- Initial screensaver state when available (`initial=true`)
+1. **`EmitInitialDisplayState()`**: 
+   - Signal: `DisplayOn`
+   - Payload: `displayState=On`, `source=initial_unknown`, `confidence=low`, `reason=no_power_event_yet`
 
-On shutdown, it unsubscribes session events and disposes display listener.
+2. **`EmitInitialIdleAndScreenSaverState()`**:
+   - **Idle sample**:
+     - If `GetLastInputInfo` succeeds: bucketed idle time with `idleStatus=ok`
+     - If fails: `idleMs=-1`, `idleBucketSec=-1`, `idleStatus=api_fail`
+   - **Screensaver state**:
+     - If `SystemParametersInfo` succeeds and debouncer commits: `ScreenSaverOn` or `ScreenSaverOff` with `running=true/false`, `screensaverStatus=ok`
+     - If fails: `IdleSample` with `screensaverStatus=api_fail`
+   - Updates `_lastIdleSampleUtc` and `_lastIdleBucketSec` for subsequent polling
+
+### Shutdown behavior
+
+`StopAsync`:
+1. Unsubscribes `SystemEvents.SessionSwitch` (if enabled)
+2. Disposes `SessionEventWindowListener` (posts WM_CLOSE, joins thread, unregisters power/WTS notifications)
+3. Calls `base.StopAsync()` to complete channel and await queue pump
+
+No final state flush is emitted (relies on natural polling loop cancellation).
 
 ---
 

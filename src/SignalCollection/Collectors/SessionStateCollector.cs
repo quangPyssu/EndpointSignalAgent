@@ -1,4 +1,5 @@
 ﻿using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
 using Microsoft.Extensions.Logging;
@@ -301,7 +302,7 @@ public sealed class SessionStateCollector : SignalCollectorBase
         _logger.LogInformation("SessionStateCollector: idle/screensaver loop started");
 
         // Emit initial idle and screensaver state
-        await EmitInitialIdleAndScreenSaverState();
+        EmitInitialIdleAndScreenSaverState();
 
         while (!ct.IsCancellationRequested)
         {
