@@ -106,7 +106,11 @@ Uses `WindowsProcessInfoResolver` with two-tier resolution:
 - App identity is hashed via `HashingService.HashStable($"app|{hashInput}")` where:
   - `hashInput` is full path (high confidence) or process name (low confidence)
 - Salt is from `StableSaltProvider` (same as `NetworkContextCollector`)
-- Category is determined by `ApplicationCategorizer.Categorize(exeName)` with normalization (trim, case-insensitive)
+- Category is determined by `ApplicationCategorizer.Categorize(exeName)` with sophisticated normalization:
+  - Extracts filename and removes extension
+  - Strips all non-alphanumeric characters
+  - Converts to lowercase
+  - Maps to category via ordinal string comparison
 - Output hash is 24 characters (first 12 bytes of SHA-256 in hex)
 
 ### Signal emission details
@@ -116,7 +120,7 @@ Emitted when a pending candidate commits to become the current app.
 
 Payload fields:
 - `appKey` (24-char hashed identity)
-- `category` (`Browser`, `IDE`, `Comms`, `Terminal`, `System`, `Other`)
+- `category` (one of: `Browser`, `IDE`, `Terminal`, `Comms`, `Office`, `Media`, `Design`, `Database`, `Gaming`, `RemoteAccess`, `FileManager`, `Email`, `System`, `Other`)
 - `collectorMode` (`hook` if event-driven, `poll` if fallback)
 - `confidence` (`high` if full path resolved, `low` if only process name)
 
