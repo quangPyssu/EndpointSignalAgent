@@ -96,8 +96,6 @@ internal sealed class NetworkFeatureAggregator
         long vpnOnMs = 0;
         long wifiConnectedMs = 0;
         long publicKnownMs = 0;
-        long vpnConfidenceHighMs = 0;
-        long wifiConfidenceHighMs = 0;
         long publicBackoffMs = 0;
 
         foreach (var evt in netEvents.Where(e => e.TimestampUtc >= window.StartUtc && e.TimestampUtc < window.EndUtc))
@@ -118,16 +116,6 @@ internal sealed class NetworkFeatureAggregator
                 if (state.PublicIpKnown)
                 {
                     publicKnownMs += delta;
-                }
-
-                if (state.VpnConfidenceHigh)
-                {
-                    vpnConfidenceHighMs += delta;
-                }
-
-                if (state.WifiIdentityHigh)
-                {
-                    wifiConfidenceHighMs += delta;
                 }
 
                 if (state.PublicIpBackoff)
@@ -159,16 +147,6 @@ internal sealed class NetworkFeatureAggregator
                 publicKnownMs += delta;
             }
 
-            if (state.VpnConfidenceHigh)
-            {
-                vpnConfidenceHighMs += delta;
-            }
-
-            if (state.WifiIdentityHigh)
-            {
-                wifiConfidenceHighMs += delta;
-            }
-
             if (state.PublicIpBackoff)
             {
                 publicBackoffMs += delta;
@@ -180,8 +158,6 @@ internal sealed class NetworkFeatureAggregator
         features["primary_wifi_connected_ratio"] = FeatureMath.SafeDivide(wifiConnectedMs, windowMs);
         features["wifi_up_ratio"] = features["primary_wifi_connected_ratio"];
         features["public_ip_known_ratio"] = FeatureMath.SafeDivide(publicKnownMs, windowMs);
-        features["vpn_confidence_high_ratio"] = FeatureMath.SafeDivide(vpnConfidenceHighMs, windowMs);
-        features["wifi_identity_high_ratio"] = FeatureMath.SafeDivide(wifiConfidenceHighMs, windowMs);
         features["public_ip_backoff_ratio"] = FeatureMath.SafeDivide(publicBackoffMs, windowMs);
 
         features["has_net_data"] = inWindow.Count > 0 ? 1.0 : 0.0;
@@ -223,11 +199,6 @@ internal sealed class NetworkFeatureAggregator
                 {
                     state.VpnOn = vpnOn;
                 }
-
-                state.VpnConfidenceHigh = string.Equals(
-                    PayloadValueReader.GetString(evt.Payload, "vpnConfidence", "low"),
-                    "high",
-                    StringComparison.OrdinalIgnoreCase);
                 break;
 
             case SignalEventType.WifiLinkChanged:
@@ -236,11 +207,6 @@ internal sealed class NetworkFeatureAggregator
                 {
                     state.WifiUp = wifiUp;
                 }
-
-                state.WifiIdentityHigh = string.Equals(
-                    PayloadValueReader.GetString(evt.Payload, "wifiIdentityConfidence", "low"),
-                    "high",
-                    StringComparison.OrdinalIgnoreCase);
                 break;
 
             case SignalEventType.PublicIpBucketChanged:
@@ -258,8 +224,6 @@ internal sealed class NetworkFeatureAggregator
         public bool VpnOn;
         public bool WifiUp;
         public bool PublicIpKnown;
-        public bool VpnConfidenceHigh;
-        public bool WifiIdentityHigh;
         public bool PublicIpBackoff;
 
         public static NetworkState Default => new()
@@ -267,10 +231,7 @@ internal sealed class NetworkFeatureAggregator
             VpnOn = false,
             WifiUp = false,
             PublicIpKnown = false,
-            VpnConfidenceHigh = false,
-            WifiIdentityHigh = false,
             PublicIpBackoff = false
         };
     }
 }
-

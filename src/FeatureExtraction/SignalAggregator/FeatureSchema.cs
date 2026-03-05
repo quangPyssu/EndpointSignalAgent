@@ -70,10 +70,7 @@ internal static class FeatureSchema
         "unique_wifi_ssid_count",
         "unique_wifi_bssid_count",
         "unique_local_network_count",
-        "unique_public_bucket_count",
-        "vpn_confidence_high_ratio",
-        "wifi_identity_high_ratio",
-        "public_ip_fetch_fail_count",
+        "unique_public_bucket_count",        "public_ip_fetch_fail_count",
         "public_ip_backoff_ratio",
         "has_net_data",
         // Compatibility aliases.
@@ -112,3 +109,4 @@ internal static class FeatureSchema
         ["other"] = "cat_other_ratio"
     };
 }
+

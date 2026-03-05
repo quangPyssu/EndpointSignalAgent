@@ -70,8 +70,6 @@ Network features (environment only)
 - unique_wifi_bssid_count
 - unique_local_network_count
 - unique_public_bucket_count
-- vpn_confidence_high_ratio
-- wifi_identity_high_ratio
 - public_ip_fetch_fail_count
 - public_ip_backoff_ratio
 - has_net_data
@@ -84,3 +82,4 @@ Cross features (explicitly gated)
 v1 compatibility aliases retained
 - wifi_up_ratio == primary_wifi_connected_ratio
 - local_prefix_change_count == local_network_change_count
+

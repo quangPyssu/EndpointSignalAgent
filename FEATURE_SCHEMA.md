@@ -73,8 +73,6 @@
 - `unique_wifi_bssid_count`
 - `unique_local_network_count`
 - `unique_public_bucket_count`
-- `vpn_confidence_high_ratio`
-- `wifi_identity_high_ratio`
 - `public_ip_fetch_fail_count`
 - `public_ip_backoff_ratio`
 - `has_net_data`
@@ -92,7 +90,7 @@ Features:
 Missingness is represented explicitly by:
 - `has_app_data`, `has_idle_data`, `has_display_data`, `has_net_data`
 - `presence_available_ratio`
-- API/status quality counts and ratios (`idle_api_fail_count`, `public_ip_fetch_fail_count`, `public_ip_backoff_ratio`, confidence ratios)
+- API/status quality counts and ratios (`idle_api_fail_count`, `public_ip_fetch_fail_count`, `public_ip_backoff_ratio`)
 
 ## v1 Compatibility
 Legacy columns are still present/compatible:
@@ -101,3 +99,4 @@ Legacy columns are still present/compatible:
 - `idle_bucket_mean_sec`, `idle_bucket_max_sec`, `idle_ge_60_ratio`
 - `vpn_on_ratio`, `wifi_up_ratio` (alias of `primary_wifi_connected_ratio`)
 - `local_prefix_change_count` (alias of `local_network_change_count`)
+
