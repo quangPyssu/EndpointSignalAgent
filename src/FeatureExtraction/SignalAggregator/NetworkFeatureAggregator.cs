@@ -1,176 +1,276 @@
 using EndpointSignalAgent.Shared.Contracts;
 
-namespace EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
+namespace EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 
 /// <summary>
-/// Aggregates network-related features from signal events based on the network_window_features schema.
-/// Handles VPN, WiFi, SSID, local network, and public IP changes.
+/// Environment/network features sourced only from NetworkContextCollector signals.
 /// </summary>
-public sealed class NetworkFeatureAggregator
+internal sealed class NetworkFeatureAggregator
 {
-    /// <summary>
-    /// Extract network features from events in a time window.
-    /// Uses state integration for VPN and WiFi ratios, and event counting for changes.
-    /// </summary>
-    public Dictionary<string, object> ExtractFeatures(
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events,
-        DateTimeOffset windowStart,
-        DateTimeOffset windowEnd)
+    public NetworkFeatureResult ExtractFeatures(
+        IReadOnlyList<FeatureSignal> events,
+        SlidingWindow window)
     {
-        var features = new Dictionary<string, object>();
-        var windowDurationMs = (windowEnd - windowStart).TotalMilliseconds;
+        var features = FeatureSchema.NetworkColumns.ToDictionary(column => column, _ => 0.0, StringComparer.Ordinal);
 
-        // Filter relevant events and sort by timestamp
-        var networkEvents = events
-            .Where(e => e.Type == SignalEventType.VpnStateChanged ||
-                       e.Type == SignalEventType.WifiLinkChanged ||
-                       e.Type == SignalEventType.WifiSsidChanged ||
-                       e.Type == SignalEventType.LocalNetworkChanged ||
-                       e.Type == SignalEventType.PublicIpBucketChanged)
-            .OrderBy(e => e.Timestamp)
+        var netEvents = events
+            .Where(IsNetworkSignal)
+            .OrderBy(e => e.TimestampUtc)
             .ToList();
 
-        // Data quality indicator
-        var inWindow = events.Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd).ToList();
-
-        features["has_net_data"] = inWindow.Any(e =>
-            e.Type == SignalEventType.VpnStateChanged ||
-            e.Type == SignalEventType.WifiLinkChanged ||
-            e.Type == SignalEventType.WifiSsidChanged ||
-            e.Type == SignalEventType.LocalNetworkChanged ||
-            e.Type == SignalEventType.PublicIpBucketChanged) ? 1 : 0;
+        var inWindow = netEvents
+            .Where(e => e.TimestampUtc >= window.StartUtc && e.TimestampUtc < window.EndUtc)
+            .ToList();
 
         features["vpn_flip_count"] = inWindow.Count(e => e.Type == SignalEventType.VpnStateChanged);
         features["wifi_flip_count"] = inWindow.Count(e => e.Type == SignalEventType.WifiLinkChanged);
-        features["ssid_change_count"] = inWindow.Count(e => e.Type == SignalEventType.WifiSsidChanged);
-        features["local_prefix_change_count"] = inWindow.Count(e => e.Type == SignalEventType.LocalNetworkChanged);
+        features["local_network_change_count"] = inWindow.Count(e => e.Type == SignalEventType.LocalNetworkChanged);
         features["public_ip_bucket_change_count"] = inWindow.Count(e => e.Type == SignalEventType.PublicIpBucketChanged);
+        features["local_prefix_change_count"] = features["local_network_change_count"];
 
+        var uniqueSsid = new HashSet<string>(StringComparer.Ordinal);
+        var uniqueBssid = new HashSet<string>(StringComparer.Ordinal);
+        var uniqueLocal = new HashSet<string>(StringComparer.Ordinal);
+        var uniquePublic = new HashSet<string>(StringComparer.Ordinal);
 
-        // State integration for VPN and WiFi
-        bool vpnOn = false;
-        bool wifiUp = false;
+        var ssidChangeCount = 0;
+        string? previousSsid = null;
 
-        long vpnOnTimeMs = 0;
-        long wifiUpTimeMs = 0;
-
-        // First pass: establish initial state
-        // Priority 1: Look for initial state events (marked with "initial"="true")
-        var initialEvents = networkEvents.Where(e => e.Payload.ContainsKey("initial")).ToList();
-        foreach (var evt in initialEvents)
+        foreach (var evt in inWindow)
         {
-            switch (evt.Type)
+            if (evt.Type == SignalEventType.WifiSsidChanged)
             {
-                case SignalEventType.VpnStateChanged:
-                    if (evt.Payload.TryGetValue("vpnOn", out var vpnOnStr) &&
-                        bool.TryParse(vpnOnStr, out var vpnState))
-                    {
-                        vpnOn = vpnState;
-                    }
-                    break;
+                var ssid = PayloadValueReader.GetString(evt.Payload, "wifiSsid", "none");
+                var bssid = PayloadValueReader.GetString(evt.Payload, "wifiBssidHash", "none");
 
-                case SignalEventType.WifiLinkChanged:
-                case SignalEventType.WifiSsidChanged:
-                    if (evt.Payload.TryGetValue("wifiUp", out var wifiUpStr) &&
-                        bool.TryParse(wifiUpStr, out var wifiState))
-                    {
-                        wifiUp = wifiState;
-                    }
-                    break;
-            }
-        }
-
-        // Priority 2: If no initial events, use most recent state before window start
-        if (initialEvents.Count == 0)
-        {
-            foreach (var evt in networkEvents.Where(e => e.Timestamp < windowStart))
-            {
-                switch (evt.Type)
+                if (!string.IsNullOrWhiteSpace(ssid) && ssid is not "none" and not "unknown")
                 {
-                    case SignalEventType.VpnStateChanged:
-                        if (evt.Payload.TryGetValue("vpnOn", out var vpnOnStr) &&
-                            bool.TryParse(vpnOnStr, out var vpnState))
-                        {
-                            vpnOn = vpnState;
-                        }
-                        break;
+                    uniqueSsid.Add(ssid);
+                }
 
-                    case SignalEventType.WifiLinkChanged:
-                    case SignalEventType.WifiSsidChanged:
-                        if (evt.Payload.TryGetValue("wifiUp", out var wifiUpStr) &&
-                            bool.TryParse(wifiUpStr, out var wifiState))
-                        {
-                            wifiUp = wifiState;
-                        }
-                        break;
+                if (!string.IsNullOrWhiteSpace(bssid) && bssid is not "none" and not "unknown")
+                {
+                    uniqueBssid.Add(bssid);
+                }
+
+                if (previousSsid is null || !string.Equals(previousSsid, ssid, StringComparison.Ordinal))
+                {
+                    ssidChangeCount++;
+                }
+
+                previousSsid = ssid;
+            }
+
+            if (evt.Type == SignalEventType.LocalNetworkChanged)
+            {
+                var local = PayloadValueReader.GetString(evt.Payload, "localNetworkHash");
+                if (!string.IsNullOrWhiteSpace(local) && local is not "none" and not "unknown")
+                {
+                    uniqueLocal.Add(local);
+                }
+            }
+
+            if (evt.Type == SignalEventType.PublicIpBucketChanged)
+            {
+                var bucket = PayloadValueReader.GetString(evt.Payload, "publicIpBucket");
+                if (!string.IsNullOrWhiteSpace(bucket) && bucket is not "none" and not "unknown")
+                {
+                    uniquePublic.Add(bucket);
                 }
             }
         }
 
-        // Second pass: integrate state changes within the window
-        // Skip initial state events as they've already been processed
-        DateTimeOffset lastTs = windowStart;
+        features["ssid_change_count"] = ssidChangeCount;
+        features["unique_wifi_ssid_count"] = uniqueSsid.Count;
+        features["unique_wifi_bssid_count"] = uniqueBssid.Count;
+        features["unique_local_network_count"] = uniqueLocal.Count;
+        features["unique_public_bucket_count"] = uniquePublic.Count;
 
-        foreach (var evt in networkEvents.Where(e => e.Timestamp >= windowStart && !e.Payload.ContainsKey("initial")))
+        features["public_ip_fetch_fail_count"] = inWindow.Count(e =>
+            e.Type == SignalEventType.PublicIpBucketChanged &&
+            string.Equals(PayloadValueReader.GetString(e.Payload, "publicIpFetchStatus"), "fail", StringComparison.OrdinalIgnoreCase));
+
+        var state = BuildInitialState(netEvents, window.StartUtc);
+        var cursor = window.StartUtc;
+
+        long vpnOnMs = 0;
+        long wifiConnectedMs = 0;
+        long publicKnownMs = 0;
+        long vpnConfidenceHighMs = 0;
+        long wifiConfidenceHighMs = 0;
+        long publicBackoffMs = 0;
+
+        foreach (var evt in netEvents.Where(e => e.TimestampUtc >= window.StartUtc && e.TimestampUtc < window.EndUtc))
         {
-            // Process interval from lastTs to current event timestamp
-            var intervalEnd = evt.Timestamp > windowEnd ? windowEnd : evt.Timestamp;
-            var intervalMs = (long)(intervalEnd - lastTs).TotalMilliseconds;
-
-            if (intervalMs > 0)
+            if (evt.TimestampUtc > cursor)
             {
-                if (vpnOn)
-                    vpnOnTimeMs += intervalMs;
-                if (wifiUp)
-                    wifiUpTimeMs += intervalMs;
+                var delta = (long)(evt.TimestampUtc - cursor).TotalMilliseconds;
+                if (state.VpnOn)
+                {
+                    vpnOnMs += delta;
+                }
+
+                if (state.WifiUp)
+                {
+                    wifiConnectedMs += delta;
+                }
+
+                if (state.PublicIpKnown)
+                {
+                    publicKnownMs += delta;
+                }
+
+                if (state.VpnConfidenceHigh)
+                {
+                    vpnConfidenceHighMs += delta;
+                }
+
+                if (state.WifiIdentityHigh)
+                {
+                    wifiConfidenceHighMs += delta;
+                }
+
+                if (state.PublicIpBackoff)
+                {
+                    publicBackoffMs += delta;
+                }
+
+                cursor = evt.TimestampUtc;
             }
 
-            // Update state based on event type
-            switch (evt.Type)
-            {
-                case SignalEventType.VpnStateChanged:
-                    if (evt.Payload.TryGetValue("vpnOn", out var vpnOnStr) &&
-                        bool.TryParse(vpnOnStr, out var vpnState))
-                    {
-                        vpnOn = vpnState;
-                    }
-                    break;
+            ApplyTransition(evt, ref state);
+        }
 
-                case SignalEventType.WifiLinkChanged:
-                case SignalEventType.WifiSsidChanged:
-                    if (evt.Payload.TryGetValue("wifiUp", out var wifiUpStr) &&
-                        bool.TryParse(wifiUpStr, out var wifiState))
-                    {
-                        wifiUp = wifiState;
-                    }
-                    break;
+        if (cursor < window.EndUtc)
+        {
+            var delta = (long)(window.EndUtc - cursor).TotalMilliseconds;
+            if (state.VpnOn)
+            {
+                vpnOnMs += delta;
             }
 
-            lastTs = intervalEnd;
+            if (state.WifiUp)
+            {
+                wifiConnectedMs += delta;
+            }
 
-            // If we've reached window end, stop processing
-            if (intervalEnd >= windowEnd)
+            if (state.PublicIpKnown)
+            {
+                publicKnownMs += delta;
+            }
+
+            if (state.VpnConfidenceHigh)
+            {
+                vpnConfidenceHighMs += delta;
+            }
+
+            if (state.WifiIdentityHigh)
+            {
+                wifiConfidenceHighMs += delta;
+            }
+
+            if (state.PublicIpBackoff)
+            {
+                publicBackoffMs += delta;
+            }
+        }
+
+        var windowMs = Math.Max(1L, window.DurationMs);
+        features["vpn_on_ratio"] = FeatureMath.SafeDivide(vpnOnMs, windowMs);
+        features["primary_wifi_connected_ratio"] = FeatureMath.SafeDivide(wifiConnectedMs, windowMs);
+        features["wifi_up_ratio"] = features["primary_wifi_connected_ratio"];
+        features["public_ip_known_ratio"] = FeatureMath.SafeDivide(publicKnownMs, windowMs);
+        features["vpn_confidence_high_ratio"] = FeatureMath.SafeDivide(vpnConfidenceHighMs, windowMs);
+        features["wifi_identity_high_ratio"] = FeatureMath.SafeDivide(wifiConfidenceHighMs, windowMs);
+        features["public_ip_backoff_ratio"] = FeatureMath.SafeDivide(publicBackoffMs, windowMs);
+
+        features["has_net_data"] = inWindow.Count > 0 ? 1.0 : 0.0;
+
+        return new NetworkFeatureResult(features);
+    }
+
+    private static bool IsNetworkSignal(FeatureSignal signal)
+    {
+        return signal.Type is SignalEventType.VpnStateChanged or
+            SignalEventType.WifiLinkChanged or
+            SignalEventType.WifiSsidChanged or
+            SignalEventType.LocalNetworkChanged or
+            SignalEventType.PublicIpBucketChanged;
+    }
+
+    private static NetworkState BuildInitialState(IReadOnlyList<FeatureSignal> orderedEvents, DateTimeOffset windowStart)
+    {
+        var state = NetworkState.Default;
+        foreach (var evt in orderedEvents)
+        {
+            if (evt.TimestampUtc >= windowStart)
+            {
+                break;
+            }
+
+            ApplyTransition(evt, ref state);
+        }
+
+        return state;
+    }
+
+    private static void ApplyTransition(FeatureSignal evt, ref NetworkState state)
+    {
+        switch (evt.Type)
+        {
+            case SignalEventType.VpnStateChanged:
+                if (PayloadValueReader.TryGetBool(evt.Payload, "vpnOn", out var vpnOn))
+                {
+                    state.VpnOn = vpnOn;
+                }
+
+                state.VpnConfidenceHigh = string.Equals(
+                    PayloadValueReader.GetString(evt.Payload, "vpnConfidence", "low"),
+                    "high",
+                    StringComparison.OrdinalIgnoreCase);
+                break;
+
+            case SignalEventType.WifiLinkChanged:
+            case SignalEventType.WifiSsidChanged:
+                if (PayloadValueReader.TryGetBool(evt.Payload, "wifiUp", out var wifiUp))
+                {
+                    state.WifiUp = wifiUp;
+                }
+
+                state.WifiIdentityHigh = string.Equals(
+                    PayloadValueReader.GetString(evt.Payload, "wifiIdentityConfidence", "low"),
+                    "high",
+                    StringComparison.OrdinalIgnoreCase);
+                break;
+
+            case SignalEventType.PublicIpBucketChanged:
+                var status = PayloadValueReader.GetString(evt.Payload, "publicIpFetchStatus", "fail");
+                var bucket = PayloadValueReader.GetString(evt.Payload, "publicIpBucket", "none");
+                state.PublicIpKnown = string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase) &&
+                    bucket is not "none" and not "unknown" && !string.IsNullOrWhiteSpace(bucket);
+                state.PublicIpBackoff = string.Equals(status, "backoff", StringComparison.OrdinalIgnoreCase);
                 break;
         }
+    }
 
-        // Process final interval from lastTs to windowEnd
-        if (lastTs < windowEnd)
+    private struct NetworkState
+    {
+        public bool VpnOn;
+        public bool WifiUp;
+        public bool PublicIpKnown;
+        public bool VpnConfidenceHigh;
+        public bool WifiIdentityHigh;
+        public bool PublicIpBackoff;
+
+        public static NetworkState Default => new()
         {
-            var finalIntervalMs = (long)(windowEnd - lastTs).TotalMilliseconds;
-
-            if (finalIntervalMs > 0)
-            {
-                if (vpnOn)
-                    vpnOnTimeMs += finalIntervalMs;
-                if (wifiUp)
-                    wifiUpTimeMs += finalIntervalMs;
-            }
-        }
-
-        // Compute ratios
-        features["vpn_on_ratio"] = windowDurationMs > 0 ? vpnOnTimeMs / windowDurationMs : 0.0;
-        features["wifi_up_ratio"] = windowDurationMs > 0 ? wifiUpTimeMs / windowDurationMs : 0.0;
-
-        return features;
+            VpnOn = false,
+            WifiUp = false,
+            PublicIpKnown = false,
+            VpnConfidenceHigh = false,
+            WifiIdentityHigh = false,
+            PublicIpBackoff = false
+        };
     }
 }
+

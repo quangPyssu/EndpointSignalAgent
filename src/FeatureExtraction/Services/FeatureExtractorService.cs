@@ -3,9 +3,10 @@ using EndpointSignalAgent.Bootstrap.Identity;
 using EndpointSignalAgent.FeatureExtraction.Broadcasting;
 using EndpointSignalAgent.FeatureExtraction.Configuration;
 using EndpointSignalAgent.FeatureExtraction.Contracts;
+using EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 using EndpointSignalAgent.FeatureExtraction.Storage;
 using EndpointSignalAgent.Shared.Contracts;
-using EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
+using EndpointSignalAgent.SignalCollection.Broadcasting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -13,24 +14,27 @@ using Microsoft.Extensions.Options;
 namespace EndpointSignalAgent.FeatureExtraction.Services;
 
 /// <summary>
-/// Feature Extractor Service - reads signals from its dedicated channel,
-/// builds time-windowed feature rows, and stores them.
-/// Runs in parallel with SignalWriterService via broadcast pattern.
+/// Live event-time feature extraction service using fixed 60s windows and 30s sliding step.
 /// </summary>
 public sealed class FeatureExtractorService : BackgroundService
 {
     private readonly ILogger<FeatureExtractorService> _logger;
-    private readonly ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> _signalReader;
+    private readonly ChannelReader<BroadcastSignal> _signalReader;
     private readonly IFeatureStore _featureStore;
     private readonly IEnrollmentStore _enrollment;
     private readonly IOptions<FeatureExtractorOptions> _options;
 
-    private readonly List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> _windowBuffer;
-    private DateTimeOffset _windowStart;
+    private readonly object _bufferLock = new();
+    private readonly List<FeatureSignal> _eventBuffer = new();
+    private readonly SemaphoreSlim _emitLock = new(1, 1);
 
-    private readonly AppFeatureAggregator _appAggregator;
-    private readonly SessionFeatureAggregator _sessionAggregator;
-    private readonly NetworkFeatureAggregator _networkAggregator;
+    private DateTimeOffset? _maxEventTsUtc;
+    private DateTimeOffset? _nextWindowStartUtc;
+
+    private readonly AppFeatureAggregator _appAggregator = new();
+    private readonly SessionFeatureAggregator _sessionAggregator = new();
+    private readonly NetworkFeatureAggregator _networkAggregator = new();
+    private readonly CrossFeatureAggregator _crossAggregator = new();
 
     public FeatureExtractorService(
         ILogger<FeatureExtractorService> logger,
@@ -44,12 +48,6 @@ public sealed class FeatureExtractorService : BackgroundService
         _featureStore = featureStore;
         _enrollment = enrollment;
         _options = options;
-        _windowBuffer = new List<(DateTimeOffset, SignalEventType, Dictionary<string, string>)>();
-        _windowStart = DateTimeOffset.UtcNow;
-
-        _appAggregator = new AppFeatureAggregator();
-        _sessionAggregator = new SessionFeatureAggregator();
-        _networkAggregator = new NetworkFeatureAggregator();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -62,177 +60,256 @@ public sealed class FeatureExtractorService : BackgroundService
 
         if (!_options.Value.EnableLiveExtraction)
         {
-            _logger.LogInformation("FeatureExtractorService: Live extraction is disabled (on-demand mode only)");
+            _logger.LogInformation("FeatureExtractorService: live extraction disabled (on-demand mode only)");
             return;
         }
 
-        // Wait for device enrollment
-        var deviceId = await _enrollment.GetIdAsync(stoppingToken);
+        if (_options.Value.WindowSizeSeconds != FeatureSchema.WindowSec || _options.Value.WindowSlideSeconds != FeatureSchema.StepSec)
+        {
+            _logger.LogWarning(
+                "FeatureExtractorService forcing fixed windowing to {WindowSec}s/{StepSec}s (configured {ConfiguredWindowSec}s/{ConfiguredStepSec}s)",
+                FeatureSchema.WindowSec,
+                FeatureSchema.StepSec,
+                _options.Value.WindowSizeSeconds,
+                _options.Value.WindowSlideSeconds);
+        }
 
-        _logger.LogInformation("FeatureExtractorService started for device {DeviceId} " +
-            "(WindowSize: {WindowSize}s, Slide: {Slide}s)",
-            deviceId, _options.Value.WindowSizeSeconds, _options.Value.WindowSlideSeconds);
+        var deviceId = await _enrollment.GetIdAsync(stoppingToken);
+        _logger.LogInformation(
+            "FeatureExtractorService started for device {DeviceId} with fixed event-time windows {WindowSec}s/{StepSec}s",
+            deviceId,
+            FeatureSchema.WindowSec,
+            FeatureSchema.StepSec);
+
+        var timerTask = BackgroundEmitLoopAsync(deviceId, stoppingToken);
 
         try
         {
-            // Start the window slide timer
-            var windowSlideTask = WindowSlideLoopAsync(deviceId, stoppingToken);
-            
-            // Process incoming signals
             await foreach (var signal in _signalReader.ReadAllAsync(stoppingToken))
             {
                 try
                 {
-                    ProcessSignal(signal, stoppingToken);
+                    ProcessSignal(signal);
+                    await TryEmitDueWindowsAsync(deviceId, stoppingToken);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to process signal {Type} for feature extraction", signal.Type);
+                    _logger.LogWarning(ex, "Feature extraction signal processing failed for {Type}", signal.Type);
                 }
             }
-
-            await windowSlideTask;
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("FeatureExtractorService is shutting down");
+            // Normal shutdown.
         }
-        catch (Exception ex)
+        finally
         {
-            _logger.LogError(ex, "FeatureExtractorService crashed");
+            try
+            {
+                await timerTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // ignore
+            }
+
+            await TryEmitDueWindowsAsync(deviceId, stoppingToken, flushAllAvailable: true);
         }
 
         _logger.LogInformation("FeatureExtractorService stopped");
     }
 
-    private void ProcessSignal(
-        (SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath) signal,
-        CancellationToken stoppingToken)
+    private async Task BackgroundEmitLoopAsync(string deviceId, CancellationToken ct)
     {
-        var now = DateTimeOffset.UtcNow;
-
-        // Add to window buffer
-        lock (_windowBuffer)
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(ct))
         {
-            _windowBuffer.Add((now, signal.Type, signal.Payload));
-
-            // Limit buffer size
-            if (_windowBuffer.Count > _options.Value.MaxEventsPerWindow)
-            {
-                _windowBuffer.RemoveAt(0);
-                _logger.LogWarning("Window buffer exceeded max size, dropping oldest event");
-            }
-        }
-
-        _logger.LogDebug("Buffered signal {Type} for feature extraction (Buffer size: {Size})",
-            signal.Type, _windowBuffer.Count);
-    }
-
-    private async Task WindowSlideLoopAsync(string deviceId, CancellationToken stoppingToken)
-    {
-        var slideInterval = TimeSpan.FromSeconds(_options.Value.WindowSlideSeconds);
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await Task.Delay(slideInterval, stoppingToken);
-
-            try
-            {
-                await ExtractAndStoreFeatures(deviceId, stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to extract and store features");
-            }
+            await TryEmitDueWindowsAsync(deviceId, ct);
         }
     }
 
-    private async Task ExtractAndStoreFeatures(string deviceId, CancellationToken stoppingToken)
+    private void ProcessSignal(BroadcastSignal signal)
     {
-        var windowEnd = DateTimeOffset.UtcNow;
-        var windowSize = TimeSpan.FromSeconds(_options.Value.WindowSizeSeconds);
-        var windowStart = windowEnd - windowSize;
+        var featureSignal = new FeatureSignal(
+            signal.TimestampUtc,
+            signal.Type,
+            new Dictionary<string, string>(signal.Payload, StringComparer.Ordinal));
 
-        // Keep 1 extra window as history so session/network ratios have carry-in state
-        var historyStart = windowStart - windowSize;
-
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> eventsContext;
-
-        lock (_windowBuffer)
+        lock (_bufferLock)
         {
-            eventsContext = _windowBuffer
-                .Where(e => e.Timestamp >= historyStart && e.Timestamp <= windowEnd)
-                .ToList();
+            _eventBuffer.Add(featureSignal);
+            _eventBuffer.Sort((a, b) => a.TimestampUtc.CompareTo(b.TimestampUtc));
 
-            _windowBuffer.RemoveAll(e => e.Timestamp < historyStart);
+            _maxEventTsUtc = SlidingWindowing.Min(_maxEventTsUtc, signal.TimestampUtc) == _maxEventTsUtc
+                ? _maxEventTsUtc
+                : signal.TimestampUtc;
+
+            if (_maxEventTsUtc is null || signal.TimestampUtc > _maxEventTsUtc.Value)
+            {
+                _maxEventTsUtc = signal.TimestampUtc;
+            }
+
+            if (_nextWindowStartUtc is null)
+            {
+                var aligned = SlidingWindowing.AlignToStepUtc(signal.TimestampUtc, FeatureSchema.StepSec);
+                _nextWindowStartUtc = aligned - TimeSpan.FromSeconds(FeatureSchema.StepSec);
+            }
+
+            if (_eventBuffer.Count > Math.Max(1000, _options.Value.MaxEventsPerWindow * 8))
+            {
+                CompactBufferLocked((_nextWindowStartUtc ?? signal.TimestampUtc) - TimeSpan.FromSeconds(FeatureSchema.WindowSec));
+            }
         }
+    }
 
-        var eventsInWindow = eventsContext
-            .Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd)
-            .ToList();
-
-        if (eventsInWindow.Count == 0)
+    private async Task TryEmitDueWindowsAsync(string deviceId, CancellationToken ct, bool flushAllAvailable = false)
+    {
+        if (!await _emitLock.WaitAsync(0, ct))
         {
-            _logger.LogDebug("No events in window {WindowStart} - {WindowEnd}, skipping feature extraction",
-                windowStart, windowEnd);
             return;
         }
 
-        // Extract features
-        var features = ExtractFeatures(eventsContext, windowStart, windowEnd);
+        try
+        {
+            List<(SlidingWindow Window, List<FeatureSignal> Context)> jobs;
 
+            lock (_bufferLock)
+            {
+                jobs = BuildWindowJobsLocked(flushAllAvailable);
+                if (jobs.Count == 0)
+                {
+                    return;
+                }
+            }
 
-        // Create and store the feature row with new schema
-        var featureRow = FeatureRow.CreateNew(
-            deviceId: deviceId,
-            windowSec: _options.Value.WindowSizeSeconds,
-            windowStartTs: windowStart,
-            featureVersion: "1.0",
-            features: features
-        );
+            foreach (var job in jobs)
+            {
+                var features = ExtractWindowFeatures(job.Context, job.Window);
+                var row = FeatureRow.CreateNew(
+                    deviceId: deviceId,
+                    windowSec: FeatureSchema.WindowSec,
+                    windowStartTs: job.Window.StartUtc,
+                    featureVersion: FeatureSchema.FeatureVersion,
+                    features: features);
 
-        var id = await _featureStore.StoreAsync(featureRow, stoppingToken);
+                await _featureStore.StoreAsync(row, ct);
+            }
 
-        _logger.LogInformation("Stored feature row {Id} with {FeatureCount} features for window {WindowStart}",
-            id, features.Count, windowStart);
+            _logger.LogDebug("Stored {Count} feature windows up to {LastWindowStart}", jobs.Count, jobs[^1].Window.StartUtc);
+        }
+        finally
+        {
+            _emitLock.Release();
+        }
     }
 
-    /// <summary>
-    /// Extract features from a collection of signal events using specialized aggregators.
-    /// Features are organized into three tables: app, session, and network.
-    /// </summary>
-    private Dictionary<string, object> ExtractFeatures(
-    List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> eventsContext,
-    DateTimeOffset windowStart,
-    DateTimeOffset windowEnd)
+    private List<(SlidingWindow Window, List<FeatureSignal> Context)> BuildWindowJobsLocked(bool flushAllAvailable)
     {
-        var eventsInWindow = eventsContext
-            .Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd)
+        var jobs = new List<(SlidingWindow Window, List<FeatureSignal> Context)>();
+
+        if (_nextWindowStartUtc is null || _maxEventTsUtc is null)
+        {
+            return jobs;
+        }
+
+        var watermark = _maxEventTsUtc.Value;
+        var maxCompleteWindowStart = SlidingWindowing.AlignToStepUtc(
+            watermark - TimeSpan.FromSeconds(FeatureSchema.WindowSec),
+            FeatureSchema.StepSec);
+
+        if (_nextWindowStartUtc.Value > maxCompleteWindowStart)
+        {
+            return jobs;
+        }
+
+        var lastStart = flushAllAvailable ? maxCompleteWindowStart : _nextWindowStartUtc.Value;
+
+        foreach (var window in SlidingWindowing.EnumerateWindowStarts(
+            _nextWindowStartUtc.Value,
+            lastStart,
+            FeatureSchema.WindowSec,
+            FeatureSchema.StepSec))
+        {
+            var historyStart = window.StartUtc - TimeSpan.FromSeconds(FeatureSchema.WindowSec + FeatureSchema.StepSec);
+            var context = _eventBuffer
+                .Where(e => e.TimestampUtc >= historyStart && e.TimestampUtc < window.EndUtc)
+                .ToList();
+
+            jobs.Add((window, context));
+        }
+
+        _nextWindowStartUtc = lastStart + TimeSpan.FromSeconds(FeatureSchema.StepSec);
+        CompactBufferLocked((_nextWindowStartUtc.Value) - TimeSpan.FromSeconds(FeatureSchema.WindowSec + FeatureSchema.StepSec + 10));
+
+        return jobs;
+    }
+
+    private void CompactBufferLocked(DateTimeOffset cutoffUtc)
+    {
+        if (_eventBuffer.Count == 0)
+        {
+            return;
+        }
+
+        var preserveStateTypes = new HashSet<SignalEventType>
+        {
+            SignalEventType.SessionLock,
+            SignalEventType.SessionUnlock,
+            SignalEventType.DisplayOn,
+            SignalEventType.DisplayOff,
+            SignalEventType.DisplayDimmed,
+            SignalEventType.ScreenSaverOn,
+            SignalEventType.ScreenSaverOff,
+            SignalEventType.IdleSample,
+            SignalEventType.VpnStateChanged,
+            SignalEventType.WifiLinkChanged,
+            SignalEventType.WifiSsidChanged,
+            SignalEventType.PublicIpBucketChanged
+        };
+
+        var latestBeforeCutoffByType = _eventBuffer
+            .Where(e => e.TimestampUtc < cutoffUtc && preserveStateTypes.Contains(e.Type))
+            .GroupBy(e => e.Type)
+            .Select(g => g.OrderByDescending(e => e.TimestampUtc).First())
             .ToList();
 
-        var features = new Dictionary<string, object>();
+        var keep = _eventBuffer
+            .Where(e => e.TimestampUtc >= cutoffUtc)
+            .Concat(latestBeforeCutoffByType)
+            .OrderBy(e => e.TimestampUtc)
+            .ToList();
 
-        // Optional meta (harmless)
-        features["event_count"] = eventsInWindow.Count;
-        features["unique_event_types"] = eventsInWindow.Select(e => e.Type).Distinct().Count();
-
-        MergeInto(features, _appAggregator.ExtractFeatures(eventsContext, windowStart, windowEnd));
-        MergeInto(features, _sessionAggregator.ExtractFeatures(eventsContext, windowStart, windowEnd));
-        MergeInto(features, _networkAggregator.ExtractFeatures(eventsContext, windowStart, windowEnd));
-
-        return features;
+        _eventBuffer.Clear();
+        _eventBuffer.AddRange(keep);
     }
 
-    private static void MergeInto(Dictionary<string, object> dest, Dictionary<string, object> src)
+    internal Dictionary<string, object> ExtractWindowFeatures(
+        IReadOnlyList<FeatureSignal> events,
+        SlidingWindow window)
     {
-        foreach (var kv in src)
-            dest[kv.Key] = kv.Value; // overwrite on collision (last wins)
+        var app = _appAggregator.ExtractFeatures(events, window);
+        var session = _sessionAggregator.ExtractFeatures(events, window);
+        var network = _networkAggregator.ExtractFeatures(events, window);
+        var cross = _crossAggregator.ExtractFeatures(window, session, app);
+
+        var flat = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        AddOrdered(flat, FeatureSchema.AppColumns, app.Features);
+        AddOrdered(flat, FeatureSchema.SessionColumns, session.Features);
+        AddOrdered(flat, FeatureSchema.NetworkColumns, network.Features);
+        AddOrdered(flat, FeatureSchema.CrossColumns, cross.Features);
+
+        return flat;
     }
 
-    /// <summary>
-    /// Extracts features from all signals in the specified jsonl file and stores them.
-    /// This method is designed for on-demand batch processing (e.g., via Ctrl+E).
-    /// </summary>
+    private static void AddOrdered(Dictionary<string, object> destination, IEnumerable<string> orderedColumns, IReadOnlyDictionary<string, double> values)
+    {
+        foreach (var column in orderedColumns)
+        {
+            destination[column] = values.TryGetValue(column, out var value) ? value : 0.0;
+        }
+    }
+
     public async Task ExtractFeaturesFromFileAsync(string jsonlPath, CancellationToken ct)
     {
         _logger.LogInformation("Starting on-demand feature extraction from {Path}", jsonlPath);
@@ -243,108 +320,83 @@ public sealed class FeatureExtractorService : BackgroundService
             return;
         }
 
-        // Get device ID
         var deviceId = await _enrollment.GetIdAsync(ct);
-
-        // Read all signals from file
         var allSignals = await ReadSignalsFromFileAsync(jsonlPath, ct);
-
         if (allSignals.Count == 0)
         {
             _logger.LogInformation("No signals found in {Path}", jsonlPath);
             return;
         }
 
-        _logger.LogInformation("Read {Count} signals from file", allSignals.Count);
+        var minTs = allSignals.Min(s => s.TimestampUtc);
+        var maxTs = allSignals.Max(s => s.TimestampUtc);
 
-        // Group signals into windows based on timestamp
-        var windowSize = TimeSpan.FromSeconds(_options.Value.WindowSizeSeconds);
-        var windowSlide = TimeSpan.FromSeconds(_options.Value.WindowSlideSeconds);
+        var firstStart = SlidingWindowing.AlignToStepUtc(minTs, FeatureSchema.StepSec) - TimeSpan.FromSeconds(FeatureSchema.StepSec);
+        var lastCompleteStart = SlidingWindowing.AlignToStepUtc(maxTs - TimeSpan.FromSeconds(FeatureSchema.WindowSec), FeatureSchema.StepSec);
 
-        // Find time range
-        var minTime = allSignals.Min(s => s.Timestamp);
-        var maxTime = allSignals.Max(s => s.Timestamp);
-
-        _logger.LogInformation("Signal time range: {MinTime} to {MaxTime}", minTime, maxTime);
-
-        var windowCount = 0;
-        var currentWindowStart = minTime;
-
-        while (currentWindowStart <= maxTime)
+        var count = 0;
+        foreach (var window in SlidingWindowing.EnumerateWindowStarts(firstStart, lastCompleteStart, FeatureSchema.WindowSec, FeatureSchema.StepSec))
         {
-            var windowEnd = currentWindowStart + windowSize;
-            var historyStart = currentWindowStart - windowSize;
-
-            // Get events for this window (with history for context)
-            var eventsContext = allSignals
-                .Where(e => e.Timestamp >= historyStart && e.Timestamp <= windowEnd)
+            var historyStart = window.StartUtc - TimeSpan.FromSeconds(FeatureSchema.WindowSec + FeatureSchema.StepSec);
+            var context = allSignals
+                .Where(e => e.TimestampUtc >= historyStart && e.TimestampUtc < window.EndUtc)
                 .ToList();
 
-            var eventsInWindow = eventsContext
-                .Where(e => e.Timestamp >= currentWindowStart && e.Timestamp <= windowEnd)
-                .ToList();
-
-            if (eventsInWindow.Count > 0)
+            if (context.Count == 0)
             {
-                // Extract features
-                var features = ExtractFeatures(eventsContext, currentWindowStart, windowEnd);
-
-                // Create and store feature row
-                var featureRow = FeatureRow.CreateNew(
-                    deviceId: deviceId,
-                    windowSec: _options.Value.WindowSizeSeconds,
-                    windowStartTs: currentWindowStart,
-                    featureVersion: "1.0",
-                    features: features
-                );
-
-                var id = await _featureStore.StoreAsync(featureRow, ct);
-                windowCount++;
-
-                _logger.LogDebug("Stored feature row {Id} for window {WindowStart} with {FeatureCount} features",
-                    id, currentWindowStart, features.Count);
+                continue;
             }
 
-            // Slide to next window
-            currentWindowStart += windowSlide;
+            var features = ExtractWindowFeatures(context, window);
+            var row = FeatureRow.CreateNew(
+                deviceId: deviceId,
+                windowSec: FeatureSchema.WindowSec,
+                windowStartTs: window.StartUtc,
+                featureVersion: FeatureSchema.FeatureVersion,
+                features: features);
+
+            await _featureStore.StoreAsync(row, ct);
+            count++;
         }
 
-        _logger.LogInformation("On-demand extraction complete: created {WindowCount} feature windows from {SignalCount} signals",
-            windowCount, allSignals.Count);
+        _logger.LogInformation("On-demand extraction complete: created {Count} windows from {SignalCount} signals", count, allSignals.Count);
     }
 
-    private async Task<List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)>> ReadSignalsFromFileAsync(
-        string jsonlPath, 
-        CancellationToken ct)
+    private async Task<List<FeatureSignal>> ReadSignalsFromFileAsync(string jsonlPath, CancellationToken ct)
     {
-        var signals = new List<(DateTimeOffset, SignalEventType, Dictionary<string, string>)>();
+        var signals = new List<FeatureSignal>();
 
         using var reader = new StreamReader(jsonlPath);
-        string? line;
-        var lineNumber = 0;
-
-        while ((line = await reader.ReadLineAsync(ct)) != null)
+        while (!reader.EndOfStream)
         {
-            lineNumber++;
-
+            ct.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line))
+            {
                 continue;
+            }
 
             try
             {
-                var signalEvent = System.Text.Json.JsonSerializer.Deserialize<SignalEvent>(line);
-                if (signalEvent != null)
+                var ev = System.Text.Json.JsonSerializer.Deserialize<SignalEvent>(line);
+                if (ev is null)
                 {
-                    signals.Add((signalEvent.TimestampUtc, signalEvent.Type, signalEvent.Payload));
+                    continue;
                 }
+
+                signals.Add(new FeatureSignal(
+                    ev.TimestampUtc,
+                    ev.Type,
+                    new Dictionary<string, string>(ev.Payload, StringComparer.Ordinal)));
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogWarning(ex, "Failed to parse signal at line {LineNumber}: {Line}", lineNumber, line);
+                // Ignore malformed lines.
             }
         }
 
+        signals.Sort((a, b) => a.TimestampUtc.CompareTo(b.TimestampUtc));
         return signals;
     }
-
 }
+

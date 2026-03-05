@@ -1,119 +1,86 @@
 Key columns
+- device_id
+- window_sec (fixed: 60)
+- window_start_ts (epoch-aligned, 30s step)
 
-device_id
-window_sec
-window_start_ts
+Feature version: 1.1
 
+Canonical rule
+- Event-time windows from SignalEvent.ts, not processing time.
+- win = [window_start_ts, window_start_ts + 60s)
+- step = 30s
 
-1) App features table
-Input events used
+App features (focus only)
+- app_switch_count
+- app_unique_count
+- app_dwell_mean_ms
+- app_dwell_std_ms
+- app_dwell_max_ms
+- app_top1_share
+- cat_browser_ratio
+- cat_ide_ratio
+- cat_terminal_ratio
+- cat_comms_ratio
+- cat_office_ratio
+- cat_media_ratio
+- cat_design_ratio
+- cat_database_ratio
+- cat_gaming_ratio
+- cat_remoteaccess_ratio
+- cat_filemanager_ratio
+- cat_email_ratio
+- cat_system_ratio
+- cat_other_ratio
+- app_confidence_high_ratio
+- no_foreground_end_count
+- collector_mode_hook_ratio
+- has_app_data
 
-ForegroundAppChanged(appKey, category)
-AppDwell(appKey, category, durationMs, reason?)
-Table: app_window_features
+Session features (presence only)
+- lock_count
+- unlock_count
+- display_toggle_count
+- screensaver_toggle_count
+- locked_ratio
+- display_off_ratio
+- display_dim_ratio
+- display_on_ratio
+- screensaver_on_ratio
+- presence_away_ratio
+- presence_present_ratio
+- idle_bucket_mean_sec
+- idle_bucket_max_sec
+- idle_ge_60_ratio
+- idle_ge_300_ratio
+- has_idle_data
+- has_display_data
+- idle_api_fail_count
+- presence_available_ratio
 
+Network features (environment only)
+- vpn_on_ratio
+- primary_wifi_connected_ratio
+- public_ip_known_ratio
+- vpn_flip_count
+- wifi_flip_count
+- ssid_change_count
+- local_network_change_count
+- public_ip_bucket_change_count
+- unique_wifi_ssid_count
+- unique_wifi_bssid_count
+- unique_local_network_count
+- unique_public_bucket_count
+- vpn_confidence_high_ratio
+- wifi_identity_high_ratio
+- public_ip_fetch_fail_count
+- public_ip_backoff_ratio
+- has_net_data
 
-Core columns (recommended v1)
+Cross features (explicitly gated)
+- active_work_ratio
+- app_switches_per_active_min
+- category_entropy_active
 
-app_switch_count = count of ForegroundAppChanged in the window
-
-app_unique_count = distinct appKey with dwell overlap > 0 in window
-
-app_dwell_mean_ms = mean of dwell segment durations overlapping window
-
-app_dwell_std_ms
-
-app_dwell_max_ms
-
-app_top1_share = max_app_dwell_ms / max(app_dwell_total_ms, 1)
-
-Category ratio columns (stable schema)
-cat_browser_ratio,cat_ide_ratio,cat_comms_ratio,cat_other_ratio (expand later)
-
-Each = category dwell overlap / (window_sec * 1000)
-
-Data quality
-
-has_app_data (0/1)
-
-How to compute dwell overlap (the key detail)
-
-Each AppDwell event gives a segment:
-
-seg_end = event.ts
-seg_start = event.ts - durationMs
-That segment may cross multiple windows → split overlap:
-
-For each window it overlaps:
-overlap_ms = max(0, min(seg_end, win_end) - max(seg_start, win_start))
-add overlap_ms to that appKey/category bucket
-
-2) Session features table
-Input events used
-
-IdleSample(idleMs, idleBucketSec)
-SessionLock(reason)
-SessionUnlock(reason)
-DisplayOn/DisplayOff(displayState, source)
-ScreenSaverOn/Off(running, idleBucketSec, idleMs) (you currently have Off; schema can include both)
-
-Table: session_window_features
-
-Core columns
-
-lock_count = count(SessionLock in window)
-State ratios (integrated over time)
-Compute by holding the last known state until next event:
-
-locked_ratio = time locked / window duration
-display_off_ratio = time display == Off / window duration
-screensaver_on_ratio = time screensaver running / window duration (0 if never observed)
-
-Idle stats (time-weighted)
-From idleBucketSec state:
-
-idle_bucket_mean_sec = weighted mean over time
-idle_bucket_max_sec = max seen (state-wise)
-idle_ge_60_ratio = fraction time idleBucketSec >= 60
-
-
-Data quality
-
-has_idle_data (0/1)
-has_display_data (0/1)
-
-How to compute ratios (state integration)
-
-Walk events in time order. Maintain state + last_ts.
-For each interval [last_ts, current_ts):
-
-attribute that interval’s duration to the windows it overlaps
-add to locked_time_ms, display_off_time_ms, etc.
-
-
-3) Network features table
-Input events used
-
-VpnStateChanged(vpnOn, vpnAdapter)
-WifiLinkChanged(wifiUp)
-WifiSsidChanged(wifiSsid, wifiUp)
-LocalNetworkChanged(localPrefix)
-PublicIpBucketChanged(publicIpBucket)
-
-Table: network_window_features
-
-
-Core columns
-
-vpn_on_ratio (state integration)
-vpn_flip_count (count of VpnStateChanged)
-
-wifi_up_ratio (state integration)
-wifi_flip_count (count of WifiLinkChanged)
-
-ssid_change_count
-local_prefix_change_count
-public_ip_bucket_change_count
-
-Data quality
-has_net_data (0/1)
+v1 compatibility aliases retained
+- wifi_up_ratio == primary_wifi_connected_ratio
+- local_prefix_change_count == local_network_change_count

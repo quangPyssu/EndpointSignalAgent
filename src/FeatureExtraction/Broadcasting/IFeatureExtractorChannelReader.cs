@@ -1,5 +1,5 @@
 using System.Threading.Channels;
-using EndpointSignalAgent.Shared.Contracts;
+using EndpointSignalAgent.SignalCollection.Broadcasting;
 
 namespace EndpointSignalAgent.FeatureExtraction.Broadcasting;
 
@@ -8,14 +8,14 @@ namespace EndpointSignalAgent.FeatureExtraction.Broadcasting;
 /// </summary>
 public interface IFeatureExtractorChannelReader
 {
-    ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> Reader { get; }
+    ChannelReader<BroadcastSignal> Reader { get; }
 }
 
 internal sealed class FeatureExtractorChannelReader : IFeatureExtractorChannelReader
 {
-    public ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> Reader { get; }
+    public ChannelReader<BroadcastSignal> Reader { get; }
 
-    public FeatureExtractorChannelReader(ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> reader)
+    public FeatureExtractorChannelReader(ChannelReader<BroadcastSignal> reader)
     {
         Reader = reader;
     }

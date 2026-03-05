@@ -1,272 +1,247 @@
 using EndpointSignalAgent.Shared.Contracts;
 
-namespace EndpointSignalAgent.src.FeatureExtraction.SignalAggregator;
+namespace EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 
 /// <summary>
-/// Aggregates session-related features from signal events based on the session_window_features schema.
-/// Handles session state (lock/unlock), display state, screensaver, and idle time tracking.
+/// Presence/availability features sourced only from SessionStateCollector signals.
 /// </summary>
-public sealed class SessionFeatureAggregator
+internal sealed class SessionFeatureAggregator
 {
-    /// <summary>
-    /// Extract session features from events in a time window.
-    /// Uses state integration to compute time-based ratios.
-    /// </summary>
-    public Dictionary<string, object> ExtractFeatures(
-        List<(DateTimeOffset Timestamp, SignalEventType Type, Dictionary<string, string> Payload)> events,
-        DateTimeOffset windowStart,
-        DateTimeOffset windowEnd)
+    public SessionFeatureResult ExtractFeatures(
+        IReadOnlyList<FeatureSignal> events,
+        SlidingWindow window)
     {
-        var features = new Dictionary<string, object>();
-        var windowDurationMs = (windowEnd - windowStart).TotalMilliseconds;
+        var features = FeatureSchema.SessionColumns.ToDictionary(column => column, _ => 0.0, StringComparer.Ordinal);
 
-        // Filter relevant events and sort by timestamp
         var sessionEvents = events
-            .Where(e => e.Type == SignalEventType.SessionLock ||
-                       e.Type == SignalEventType.SessionUnlock ||
-                       e.Type == SignalEventType.DisplayOn ||
-                       e.Type == SignalEventType.DisplayOff ||
-                       e.Type == SignalEventType.DisplayDimmed ||
-                       e.Type == SignalEventType.ScreenSaverOn ||
-                       e.Type == SignalEventType.ScreenSaverOff ||
-                       e.Type == SignalEventType.IdleSample)
-            .OrderBy(e => e.Timestamp)
+            .Where(IsSessionSignal)
+            .OrderBy(e => e.TimestampUtc)
             .ToList();
 
-        // Data quality indicators
-        var inWindow = events.Where(e => e.Timestamp >= windowStart && e.Timestamp <= windowEnd).ToList();
-
-        var hasIdleData = inWindow.Any(e => e.Type == SignalEventType.IdleSample);
-        var hasDisplayData = inWindow.Any(e => e.Type == SignalEventType.DisplayOn ||
-                                               e.Type == SignalEventType.DisplayOff ||
-                                               e.Type == SignalEventType.DisplayDimmed);
-
-        features["has_idle_data"] = hasIdleData ? 1 : 0;
-        features["has_display_data"] = hasDisplayData ? 1 : 0;
+        var inWindow = sessionEvents
+            .Where(e => e.TimestampUtc >= window.StartUtc && e.TimestampUtc < window.EndUtc)
+            .ToList();
 
         features["lock_count"] = inWindow.Count(e => e.Type == SignalEventType.SessionLock);
+        features["unlock_count"] = inWindow.Count(e => e.Type == SignalEventType.SessionUnlock);
+        features["idle_api_fail_count"] = inWindow.Count(e =>
+            e.Type == SignalEventType.IdleSample &&
+            string.Equals(PayloadValueReader.GetString(e.Payload, "idleStatus"), "api_fail", StringComparison.OrdinalIgnoreCase));
 
+        var state = BuildInitialState(sessionEvents, window.StartUtc);
+        var intervals = new List<SessionInterval>();
 
-        // State integration: track state changes over time
-        bool isLocked = false;
-        bool isDisplayOff = false;
-        bool isScreensaverOn = false;
-        int currentIdleBucketSec = 0;
+        DateTimeOffset cursor = window.StartUtc;
+        var ordered = sessionEvents.Where(e => e.TimestampUtc >= window.StartUtc && e.TimestampUtc < window.EndUtc).ToList();
 
-        long lockedTimeMs = 0;
-        long displayOffTimeMs = 0;
-        long screensaverTimeMs = 0;
-        long idleBucketWeightedSum = 0;
-        long idleBucketTotalTimeMs = 0;
-        long idleGe60TimeMs = 0;
-        int maxIdleBucketSec = 0;
+        var displayToggleCount = 0;
+        var screensaverToggleCount = 0;
 
-        // First pass: establish initial state
-        // Priority 1: Look for initial state events (marked with "initial"="true")
-        var initialEvents = sessionEvents.Where(e => e.Payload.ContainsKey("initial")).ToList();
-        foreach (var evt in initialEvents)
+        foreach (var evt in ordered)
         {
-            switch (evt.Type)
+            if (evt.TimestampUtc > cursor)
             {
-                case SignalEventType.SessionLock:
-                    isLocked = true;
-                    break;
-
-                case SignalEventType.SessionUnlock:
-                    isLocked = false;
-                    break;
-
-                case SignalEventType.DisplayOff:
-                case SignalEventType.DisplayDimmed:
-                    isDisplayOff = true;
-                    break;
-
-                case SignalEventType.DisplayOn:
-                    isDisplayOff = false;
-                    break;
-
-                case SignalEventType.ScreenSaverOn:
-                    isScreensaverOn = true;
-                    break;
-
-                case SignalEventType.ScreenSaverOff:
-                    isScreensaverOn = false;
-                    break;
-
-                case SignalEventType.IdleSample:
-                    if (evt.Payload.TryGetValue("idleBucketSec", out var idleBucketStr) &&
-                        int.TryParse(idleBucketStr, out var idleBucket))
-                    {
-                        currentIdleBucketSec = idleBucket;
-                        maxIdleBucketSec = Math.Max(maxIdleBucketSec, idleBucket);
-                    }
-                    break;
+                intervals.Add(CreateInterval(cursor, evt.TimestampUtc, state));
+                cursor = evt.TimestampUtc;
             }
-        }
 
-        // Priority 2: If no initial events, use most recent state before window start
-        if (initialEvents.Count == 0)
-        {
-            foreach (var evt in sessionEvents.Where(e => e.Timestamp < windowStart))
+            var previousDisplay = state.DisplayState;
+            var previousScreenSaver = state.ScreenSaverOn;
+
+            ApplyStateTransition(evt, ref state);
+
+            if (evt.Type is SignalEventType.DisplayOn or SignalEventType.DisplayOff or SignalEventType.DisplayDimmed)
             {
-                switch (evt.Type)
+                if (previousDisplay != state.DisplayState)
                 {
-                    case SignalEventType.SessionLock:
-                        isLocked = true;
-                        break;
+                    displayToggleCount++;
+                }
+            }
 
-                    case SignalEventType.SessionUnlock:
-                        isLocked = false;
-                        break;
-
-                    case SignalEventType.DisplayOff:
-                    case SignalEventType.DisplayDimmed:
-                        isDisplayOff = true;
-                        break;
-
-                    case SignalEventType.DisplayOn:
-                        isDisplayOff = false;
-                        break;
-
-                    case SignalEventType.ScreenSaverOn:
-                        isScreensaverOn = true;
-                        break;
-
-                    case SignalEventType.ScreenSaverOff:
-                        isScreensaverOn = false;
-                        break;
-
-                    case SignalEventType.IdleSample:
-                        if (evt.Payload.TryGetValue("idleBucketSec", out var idleBucketStr) &&
-                            int.TryParse(idleBucketStr, out var idleBucket))
-                        {
-                            currentIdleBucketSec = idleBucket;
-                            maxIdleBucketSec = Math.Max(maxIdleBucketSec, idleBucket);
-                        }
-                        break;
+            if (evt.Type is SignalEventType.ScreenSaverOn or SignalEventType.ScreenSaverOff)
+            {
+                if (previousScreenSaver != state.ScreenSaverOn)
+                {
+                    screensaverToggleCount++;
                 }
             }
         }
 
-        // Second pass: integrate state changes within the window
-        // Skip initial state events as they've already been processed
-        DateTimeOffset lastTs = windowStart;
-
-        foreach (var evt in sessionEvents.Where(e => e.Timestamp >= windowStart && !e.Payload.ContainsKey("initial")))
+        if (cursor < window.EndUtc)
         {
-            // Process interval from lastTs to current event timestamp
-            var intervalEnd = evt.Timestamp > windowEnd ? windowEnd : evt.Timestamp;
-            var intervalMs = (long)(intervalEnd - lastTs).TotalMilliseconds;
+            intervals.Add(CreateInterval(cursor, window.EndUtc, state));
+        }
 
-            if (intervalMs > 0)
+        var windowMs = Math.Max(1L, window.DurationMs);
+
+        var lockedMs = intervals.Where(i => i.Locked).Sum(i => i.DurationMs);
+        var displayOffMs = intervals.Where(i => i.DisplayState == SessionDisplayState.Off).Sum(i => i.DurationMs);
+        var displayDimMs = intervals.Where(i => i.DisplayState == SessionDisplayState.Dimmed).Sum(i => i.DurationMs);
+        var displayOnMs = intervals.Where(i => i.DisplayState == SessionDisplayState.On).Sum(i => i.DurationMs);
+        var screenSaverMs = intervals.Where(i => i.ScreenSaverOn).Sum(i => i.DurationMs);
+
+        var presenceKnownMs = intervals.Where(i => i.PresenceKnown).Sum(i => i.DurationMs);
+        var presenceAwayMs = intervals.Where(i => i.PresenceKnown && i.PresenceAway).Sum(i => i.DurationMs);
+        var presencePresentMs = intervals.Where(i => i.PresenceKnown && !i.PresenceAway).Sum(i => i.DurationMs);
+
+        var idleKnownIntervals = intervals.Where(i => i.IdleKnown).ToList();
+        var idleKnownMs = idleKnownIntervals.Sum(i => i.DurationMs);
+        var idleWeighted = idleKnownIntervals.Sum(i => (double)i.IdleBucketSec * i.DurationMs);
+        var idleMax = idleKnownIntervals.Select(i => i.IdleBucketSec).DefaultIfEmpty(0).Max();
+        var idleGe60Ms = idleKnownIntervals.Where(i => i.IdleBucketSec >= 60).Sum(i => i.DurationMs);
+        var idleGe300Ms = idleKnownIntervals.Where(i => i.IdleBucketSec >= 300).Sum(i => i.DurationMs);
+
+        features["display_toggle_count"] = displayToggleCount;
+        features["screensaver_toggle_count"] = screensaverToggleCount;
+        features["locked_ratio"] = FeatureMath.SafeDivide(lockedMs, windowMs);
+        features["display_off_ratio"] = FeatureMath.SafeDivide(displayOffMs, windowMs);
+        features["display_dim_ratio"] = FeatureMath.SafeDivide(displayDimMs, windowMs);
+        features["display_on_ratio"] = FeatureMath.SafeDivide(displayOnMs, windowMs);
+        features["screensaver_on_ratio"] = FeatureMath.SafeDivide(screenSaverMs, windowMs);
+        features["presence_away_ratio"] = FeatureMath.SafeDivide(presenceAwayMs, windowMs);
+        features["presence_present_ratio"] = FeatureMath.SafeDivide(presencePresentMs, windowMs);
+        features["presence_available_ratio"] = FeatureMath.SafeDivide(presenceKnownMs, windowMs);
+        features["idle_bucket_mean_sec"] = idleKnownMs > 0 ? idleWeighted / idleKnownMs : 0.0;
+        features["idle_bucket_max_sec"] = idleMax;
+        features["idle_ge_60_ratio"] = FeatureMath.SafeDivide(idleGe60Ms, windowMs);
+        features["idle_ge_300_ratio"] = FeatureMath.SafeDivide(idleGe300Ms, windowMs);
+        features["has_idle_data"] = idleKnownMs > 0 ? 1.0 : 0.0;
+        features["has_display_data"] = (displayOffMs + displayDimMs + displayOnMs) > 0 ? 1.0 : 0.0;
+
+        return new SessionFeatureResult(features, intervals);
+    }
+
+    private static bool IsSessionSignal(FeatureSignal signal)
+    {
+        return signal.Type is SignalEventType.SessionLock or
+            SignalEventType.SessionUnlock or
+            SignalEventType.DisplayOn or
+            SignalEventType.DisplayOff or
+            SignalEventType.DisplayDimmed or
+            SignalEventType.ScreenSaverOn or
+            SignalEventType.ScreenSaverOff or
+            SignalEventType.IdleSample;
+    }
+
+    private static SessionState BuildInitialState(IReadOnlyList<FeatureSignal> orderedEvents, DateTimeOffset windowStart)
+    {
+        var state = SessionState.Default;
+        foreach (var evt in orderedEvents)
+        {
+            if (evt.TimestampUtc >= windowStart)
             {
-                if (isLocked)
-                    lockedTimeMs += intervalMs;
-                if (isDisplayOff)
-                    displayOffTimeMs += intervalMs;
-                if (isScreensaverOn)
-                    screensaverTimeMs += intervalMs;
+                break;
+            }
 
-                // Idle bucket weighted sum
-                if (hasIdleData)
+            ApplyStateTransition(evt, ref state);
+        }
+
+        return state;
+    }
+
+    private static SessionInterval CreateInterval(DateTimeOffset startUtc, DateTimeOffset endUtc, SessionState state)
+    {
+        return new SessionInterval(
+            startUtc,
+            endUtc,
+            state.Locked,
+            state.DisplayState,
+            state.ScreenSaverOn,
+            state.PresenceKnown,
+            state.PresenceAway,
+            state.IdleKnown,
+            state.IdleBucketSec);
+    }
+
+    private static void ApplyStateTransition(FeatureSignal evt, ref SessionState state)
+    {
+        switch (evt.Type)
+        {
+            case SignalEventType.SessionLock:
+                state.Locked = true;
+                break;
+
+            case SignalEventType.SessionUnlock:
+                state.Locked = false;
+                break;
+
+            case SignalEventType.DisplayOn:
+                state.DisplayState = SessionDisplayState.On;
+                UpdatePresenceFromPayload(evt.Payload, ref state);
+                break;
+
+            case SignalEventType.DisplayOff:
+                state.DisplayState = SessionDisplayState.Off;
+                UpdatePresenceFromPayload(evt.Payload, ref state);
+                break;
+
+            case SignalEventType.DisplayDimmed:
+                state.DisplayState = SessionDisplayState.Dimmed;
+                UpdatePresenceFromPayload(evt.Payload, ref state);
+                break;
+
+            case SignalEventType.ScreenSaverOn:
+                state.ScreenSaverOn = true;
+                break;
+
+            case SignalEventType.ScreenSaverOff:
+                state.ScreenSaverOn = false;
+                break;
+
+            case SignalEventType.IdleSample:
+                if (PayloadValueReader.TryGetInt(evt.Payload, "idleBucketSec", out var idleBucketSec) && idleBucketSec >= 0)
                 {
-                    idleBucketWeightedSum += currentIdleBucketSec * intervalMs;
-                    idleBucketTotalTimeMs += intervalMs;
-
-                    if (currentIdleBucketSec >= 60)
-                        idleGe60TimeMs += intervalMs;
+                    state.IdleKnown = true;
+                    state.IdleBucketSec = idleBucketSec;
                 }
-            }
 
-            // Update state based on event type
-            switch (evt.Type)
-            {
-                case SignalEventType.SessionLock:
-                    isLocked = true;
-                    break;
-
-                case SignalEventType.SessionUnlock:
-                    isLocked = false;
-                    break;
-
-                case SignalEventType.DisplayOff:
-                case SignalEventType.DisplayDimmed:
-                    isDisplayOff = true;
-                    break;
-
-                case SignalEventType.DisplayOn:
-                    isDisplayOff = false;
-                    break;
-
-                case SignalEventType.ScreenSaverOn:
-                    isScreensaverOn = true;
-                    break;
-
-                case SignalEventType.ScreenSaverOff:
-                    isScreensaverOn = false;
-                    break;
-
-                case SignalEventType.IdleSample:
-                    if (evt.Payload.TryGetValue("idleBucketSec", out var idleBucketStr) &&
-                        int.TryParse(idleBucketStr, out var idleBucket))
-                    {
-                        currentIdleBucketSec = idleBucket;
-                        maxIdleBucketSec = Math.Max(maxIdleBucketSec, idleBucket);
-                    }
-                    break;
-            }
-
-            lastTs = intervalEnd;
-
-            // If we've reached window end, stop processing
-            if (intervalEnd >= windowEnd)
+                UpdatePresenceFromPayload(evt.Payload, ref state);
                 break;
         }
+    }
 
-        // Process final interval from lastTs to windowEnd
-        if (lastTs < windowEnd)
+    private static void UpdatePresenceFromPayload(IReadOnlyDictionary<string, string> payload, ref SessionState state)
+    {
+        if (!payload.TryGetValue("userPresence", out var presenceRaw) || string.IsNullOrWhiteSpace(presenceRaw))
         {
-            var finalIntervalMs = (long)(windowEnd - lastTs).TotalMilliseconds;
-
-            if (finalIntervalMs > 0)
-            {
-                if (isLocked)
-                    lockedTimeMs += finalIntervalMs;
-                if (isDisplayOff)
-                    displayOffTimeMs += finalIntervalMs;
-                if (isScreensaverOn)
-                    screensaverTimeMs += finalIntervalMs;
-
-                if (hasIdleData)
-                {
-                    idleBucketWeightedSum += currentIdleBucketSec * finalIntervalMs;
-                    idleBucketTotalTimeMs += finalIntervalMs;
-
-                    if (currentIdleBucketSec >= 60)
-                        idleGe60TimeMs += finalIntervalMs;
-                }
-            }
+            return;
         }
 
-        // Compute ratios
-        features["locked_ratio"] = windowDurationMs > 0 ? lockedTimeMs / windowDurationMs : 0.0;
-        features["display_off_ratio"] = windowDurationMs > 0 ? displayOffTimeMs / windowDurationMs : 0.0;
-        features["screensaver_on_ratio"] = windowDurationMs > 0 ? screensaverTimeMs / windowDurationMs : 0.0;
-
-        // Idle statistics
-        if (idleBucketTotalTimeMs > 0)
+        var normalized = presenceRaw.Trim().ToLowerInvariant();
+        if (normalized is "away")
         {
-            features["idle_bucket_mean_sec"] = (double)idleBucketWeightedSum / idleBucketTotalTimeMs;
-            features["idle_bucket_max_sec"] = maxIdleBucketSec;
-            features["idle_ge_60_ratio"] = (double)idleGe60TimeMs / windowDurationMs;
-        }
-        else
-        {
-            features["idle_bucket_mean_sec"] = 0.0;
-            features["idle_bucket_max_sec"] = 0;
-            features["idle_ge_60_ratio"] = 0.0;
+            state.PresenceKnown = true;
+            state.PresenceAway = true;
+            return;
         }
 
-        return features;
+        if (normalized is "present")
+        {
+            state.PresenceKnown = true;
+            state.PresenceAway = false;
+        }
+    }
+
+    private struct SessionState
+    {
+        public bool Locked;
+        public SessionDisplayState DisplayState;
+        public bool ScreenSaverOn;
+        public bool PresenceKnown;
+        public bool PresenceAway;
+        public bool IdleKnown;
+        public int IdleBucketSec;
+
+        public static SessionState Default => new()
+        {
+            Locked = false,
+            DisplayState = SessionDisplayState.Unknown,
+            ScreenSaverOn = false,
+            PresenceKnown = false,
+            PresenceAway = false,
+            IdleKnown = false,
+            IdleBucketSec = 0
+        };
     }
 }
+

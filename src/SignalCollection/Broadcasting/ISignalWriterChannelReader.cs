@@ -8,14 +8,14 @@ namespace EndpointSignalAgent.SignalCollection.Broadcasting;
 /// </summary>
 public interface ISignalWriterChannelReader
 {
-    ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> Reader { get; }
+    ChannelReader<BroadcastSignal> Reader { get; }
 }
 
 internal sealed class SignalWriterChannelReader : ISignalWriterChannelReader
 {
-    public ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> Reader { get; }
+    public ChannelReader<BroadcastSignal> Reader { get; }
 
-    public SignalWriterChannelReader(ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> reader)
+    public SignalWriterChannelReader(ChannelReader<BroadcastSignal> reader)
     {
         Reader = reader;
     }

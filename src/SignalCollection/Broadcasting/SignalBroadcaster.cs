@@ -11,15 +11,15 @@ namespace EndpointSignalAgent.SignalCollection.Broadcasting;
 public sealed class SignalBroadcaster : ISignalBroadcaster
 {
     private readonly ILogger<SignalBroadcaster> _logger;
-    private readonly List<ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>> _writers;
+    private readonly List<ChannelWriter<BroadcastSignal>> _writers;
 
     public SignalBroadcaster(
         ILogger<SignalBroadcaster> logger,
-        IEnumerable<ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>> writers)
+        IEnumerable<ChannelWriter<BroadcastSignal>> writers)
     {
         _logger = logger;
         _writers = writers.ToList();
-        
+
         if (_writers.Count == 0)
         {
             _logger.LogWarning("SignalBroadcaster initialized with no channel writers");
@@ -42,7 +42,7 @@ public sealed class SignalBroadcaster : ISignalBroadcaster
             return;
         }
 
-        var signal = (type, payload, spoolPath);
+        var signal = new BroadcastSignal(DateTimeOffset.UtcNow, type, payload, spoolPath);
         var tasks = new List<Task>(_writers.Count);
 
         foreach (var writer in _writers)
@@ -54,8 +54,8 @@ public sealed class SignalBroadcaster : ISignalBroadcaster
     }
 
     private async Task WriteToChannelAsync(
-        ChannelWriter<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> writer,
-        (SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath) signal,
+        ChannelWriter<BroadcastSignal> writer,
+        BroadcastSignal signal,
         SignalEventType type,
         CancellationToken cancellationToken)
     {
@@ -69,7 +69,7 @@ public sealed class SignalBroadcaster : ISignalBroadcaster
         }
         catch (OperationCanceledException)
         {
-            // Expected during shutdown
+            // Expected during shutdown.
         }
         catch (Exception ex)
         {

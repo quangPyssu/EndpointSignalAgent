@@ -47,7 +47,7 @@ builder.Services.AddOptions<FeatureExtractorOptions>()
 
 // Separate Signal Channels for Broadcast Pattern
 // SignalWriterService Channel
-var signalWriterChannel = Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
+var signalWriterChannel = Channel.CreateBounded<EndpointSignalAgent.SignalCollection.Broadcasting.BroadcastSignal>(
     new BoundedChannelOptions(1000)
     {
         FullMode = BoundedChannelFullMode.Wait,
@@ -56,7 +56,7 @@ var signalWriterChannel = Channel.CreateBounded<(SignalEventType Type, Dictionar
     });
 
 // FeatureExtractorService Channel
-var featureExtractorChannel = Channel.CreateBounded<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)>(
+var featureExtractorChannel = Channel.CreateBounded<EndpointSignalAgent.SignalCollection.Broadcasting.BroadcastSignal>(
     new BoundedChannelOptions(1000)
     {
         FullMode = BoundedChannelFullMode.Wait,
@@ -195,3 +195,4 @@ builder.Services.AddHostedService<DecisionProcessorService>();
 
 var host = builder.Build();
 host.Run();
+

@@ -10,7 +10,7 @@ namespace EndpointSignalAgent.SignalCollection.Services;
 public sealed class SignalWriterService : BackgroundService
 {
     private readonly ILogger<SignalWriterService> _logger;
-    private readonly ChannelReader<(SignalEventType Type, Dictionary<string, string> Payload, string SpoolPath)> _reader;
+    private readonly ChannelReader<BroadcastSignal> _reader;
 
     public SignalWriterService(
         ILogger<SignalWriterService> logger,
@@ -32,12 +32,12 @@ public sealed class SignalWriterService : BackgroundService
                 {
                     using var writer = new SpoolFileCollector(signal.SpoolPath);
                     await writer.WriteAsync(
-                        new SignalEvent(DateTimeOffset.UtcNow, signal.Type, signal.Payload),
+                        new SignalEvent(signal.TimestampUtc, signal.Type, signal.Payload),
                         stoppingToken);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to write signal {Type} to {SpoolPath}", 
+                    _logger.LogWarning(ex, "Failed to write signal {Type} to {SpoolPath}",
                         signal.Type, signal.SpoolPath);
                 }
             }
@@ -50,3 +50,4 @@ public sealed class SignalWriterService : BackgroundService
         _logger.LogInformation("SignalWriterService stopped.");
     }
 }
+
