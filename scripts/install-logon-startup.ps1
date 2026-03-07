@@ -33,8 +33,9 @@ if (Test-Path $registerScript) {
 $exeFullPath = (Resolve-Path $ExecutablePath).Path
 Write-Host "Registering startup task '$TaskName' for user $env:USERNAME"
 Write-Host "Executable: $exeFullPath"
-
-$action = New-ScheduledTaskAction -Execute $exeFullPath
+$workingDirectory = Split-Path -Path $exeFullPath -Parent
+Write-Host "Working directory: $workingDirectory"
+$action = New-ScheduledTaskAction -Execute $exeFullPath -WorkingDirectory $workingDirectory
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable

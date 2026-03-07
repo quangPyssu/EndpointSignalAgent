@@ -24,6 +24,8 @@ When you export/publish the app, include these files next to `EndpointSignalAgen
 - `remove-logon-startup.cmd`
 - (and their `.ps1` counterparts)
 
+> Note: startup registration scripts configure the task working directory to the app folder, so spool/features files are created next to the executable instead of `C:\Windows\System32`.
+
 Then users can simply double-click:
 - `install-logon-startup.cmd` to register startup
 - `remove-logon-startup.cmd` to unregister startup
