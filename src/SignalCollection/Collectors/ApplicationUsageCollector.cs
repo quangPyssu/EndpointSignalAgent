@@ -1,6 +1,8 @@
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.Shared.Utilities;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
+using EndpointSignalAgent.SignalCollection.Services;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -30,10 +32,12 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
 
     public ApplicationUsageCollector(
         ILogger<ApplicationUsageCollector> logger,
-        ISignalBroadcaster broadcaster)
+        ISignalBroadcaster broadcaster,
+        ICollectionControl collectionControl)
         : this(
             logger,
             broadcaster,
+            collectionControl,
             new WindowsForegroundSource(),
             new WindowsProcessInfoResolver(),
             new SystemClock(),
@@ -45,11 +49,12 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
     internal ApplicationUsageCollector(
         ILogger<ApplicationUsageCollector> logger,
         ISignalBroadcaster broadcaster,
+        ICollectionControl collectionControl,
         IForegroundSource foregroundSource,
         IProcessInfoResolver processResolver,
         IClock clock,
         EndpointSignalAgent.SignalCollection.Collectors.Network.IHashingService hashing)
-        : base(@"spool\signals.jsonl", broadcaster)
+        : base(@"spool\signals.jsonl", broadcaster, collectionControl)
     {
         _logger = logger;
         _foregroundSource = foregroundSource;

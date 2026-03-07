@@ -2,6 +2,7 @@
 using System.Threading.Channels;
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
+using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.Logging;
 
 namespace EndpointSignalAgent.SignalCollection.Collectors;
@@ -37,8 +38,9 @@ public sealed class SessionStateCollector : SignalCollectorBase
 
     public SessionStateCollector(
         ILogger<SessionStateCollector> logger,
-        ISignalBroadcaster broadcaster)
-        : base(@"spool\signals.jsonl", broadcaster)
+        ISignalBroadcaster broadcaster,
+        ICollectionControl collectionControl)
+        : base(@"spool\signals.jsonl", broadcaster, collectionControl)
     {
         _logger = logger;
     }
