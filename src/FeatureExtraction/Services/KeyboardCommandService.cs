@@ -17,6 +17,8 @@ public sealed class KeyboardCommandService : BackgroundService
     private readonly IFeatureStore _featureStore;
     private readonly FeatureExtractorService _featureExtractor;
 
+    public readonly record struct FeatureExportResult(bool Success, string ExportType, int RowCount, string? FilePath, string Message);
+
     public KeyboardCommandService(
         ILogger<KeyboardCommandService> logger,
         IFeatureStore featureStore,
@@ -69,7 +71,7 @@ public sealed class KeyboardCommandService : BackgroundService
                         else if (keyInfo.Key == ConsoleKey.O && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
                         {
                             _logger.LogInformation("Ctrl+O detected - exporting all feature data...");
-                            await ExportFeatureDataAsync(true, ct);
+                            await ExportAllFeatureDataAsync(ct);
                         }
                         // Check for Ctrl+Shift+X (clear database)
                         else if (keyInfo.Key == ConsoleKey.X && 
@@ -93,6 +95,11 @@ public sealed class KeyboardCommandService : BackgroundService
                 _logger.LogError(ex, "Error in keyboard monitoring");
             }
         }, ct);
+    }
+
+    public Task<FeatureExportResult> ExportAllFeatureDataAsync(CancellationToken ct)
+    {
+        return ExportFeatureDataAsync(true, ct);
     }
 
     private async Task ExtractFeaturesFromAllSignalsAsync(CancellationToken ct)
@@ -123,7 +130,7 @@ public sealed class KeyboardCommandService : BackgroundService
         }
     }
 
-    private async Task ExportFeatureDataAsync(bool exportAll, CancellationToken ct)
+    private async Task<FeatureExportResult> ExportFeatureDataAsync(bool exportAll, CancellationToken ct)
     {
         try
         {
@@ -147,7 +154,12 @@ public sealed class KeyboardCommandService : BackgroundService
             {
                 _logger.LogInformation("No {Type} feature data to export", exportType);
                 Console.WriteLine($"\n[Export] No {exportType} feature data available to export.");
-                return;
+                return new FeatureExportResult(
+                    Success: true,
+                    ExportType: exportType,
+                    RowCount: 0,
+                    FilePath: null,
+                    Message: $"No {exportType} feature data available to export.");
             }
 
             // Create export directory if it doesn't exist
@@ -163,11 +175,23 @@ public sealed class KeyboardCommandService : BackgroundService
 
             _logger.LogInformation("Exported {Count} {Type} feature rows to {Filename}", rows.Count, exportType, filename);
             Console.WriteLine($"\n[Export] Successfully exported {rows.Count} {exportType} feature rows to:\n  {filename}\n");
+            return new FeatureExportResult(
+                Success: true,
+                ExportType: exportType,
+                RowCount: rows.Count,
+                FilePath: filename,
+                Message: $"Successfully exported {rows.Count} {exportType} feature rows.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to export feature data");
             Console.WriteLine($"\n[Export] Error: {ex.Message}\n");
+            return new FeatureExportResult(
+                Success: false,
+                ExportType: exportAll ? "all" : "unsent",
+                RowCount: 0,
+                FilePath: null,
+                Message: ex.Message);
         }
     }
 
