@@ -15,18 +15,47 @@
    - **Exit**
 4. Use **Exit** for graceful shutdown of all hosted services.
 
-## Enable start at user logon (Task Scheduler)
+## Smooth setup for "start at user logon"
 
-Use the provided helper script (current user, no admin required in normal cases):
+### Option A (recommended for distribution/export): one-click scripts beside the app
+
+When you export/publish the app, include these files next to `EndpointSignalAgent.exe`:
+- `install-logon-startup.cmd`
+- `remove-logon-startup.cmd`
+- (and their `.ps1` counterparts)
+
+Then users can simply double-click:
+- `install-logon-startup.cmd` to register startup
+- `remove-logon-startup.cmd` to unregister startup
+
+No manual README steps are required for the end user in this mode.
+
+### Option B (from repo): direct scripts
+
+Register startup task:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\register-logon-startup.ps1 -ExecutablePath "C:\path\to\EndpointSignalAgent.exe"
 ```
 
-Optional removal:
+Unregister startup task:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\unregister-logon-startup.ps1
+```
+
+## Export/publish with startup scripts included
+
+Use this helper to publish and automatically copy setup/remove scripts into the export folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\export-app-with-startup-tools.ps1
+```
+
+Optional example with self-contained output:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\export-app-with-startup-tools.ps1 -Runtime win-x64 -SelfContained
 ```
 
 ## Verify tray startup and pipeline behavior
