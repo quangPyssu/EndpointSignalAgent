@@ -2,6 +2,7 @@ using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.Shared.Utilities;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
 using EndpointSignalAgent.SignalCollection.Services;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
