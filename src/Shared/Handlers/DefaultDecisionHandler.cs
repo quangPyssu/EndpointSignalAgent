@@ -1,5 +1,6 @@
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.Shared.State;
+using Microsoft.Extensions.Logging;
 
 namespace EndpointSignalAgent.Shared.Handlers;
 

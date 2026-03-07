@@ -11,6 +11,9 @@ using EndpointSignalAgent.Shared.State;
 using EndpointSignalAgent.SignalCollection.Collectors;
 using EndpointSignalAgent.SignalCollection.Providers;
 using EndpointSignalAgent.SignalCollection.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Threading.Channels;
 
