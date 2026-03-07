@@ -9,6 +9,7 @@
 2. The app starts in the background and shows a tray icon.
 3. Right-click the tray icon for:
    - **Status**
+   - **Export all features to CSV** (same behavior as Ctrl+O)
    - **Open spool folder**
    - **Pause collection / Resume collection**
    - **Exit**

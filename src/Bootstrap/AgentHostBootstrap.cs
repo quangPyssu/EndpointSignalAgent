@@ -157,7 +157,8 @@ public static class AgentHostBootstrap
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FeatureExtractorService>());
         builder.Services.AddHostedService<FeatureUploadService>();
         builder.Services.AddHostedService<FeatureCleanupService>();
-        builder.Services.AddHostedService<KeyboardCommandService>();
+        builder.Services.AddSingleton<KeyboardCommandService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<KeyboardCommandService>());
 
         builder.Services.AddSingleton<IAgentState, AgentState>();
         builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();

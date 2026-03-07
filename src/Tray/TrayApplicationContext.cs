@@ -1,5 +1,6 @@
 using EndpointSignalAgent.Bootstrap;
 using EndpointSignalAgent.Bootstrap.Configuration;
+using EndpointSignalAgent.FeatureExtraction.Services;
 using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -17,6 +18,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusMenuItem;
+    private readonly ToolStripMenuItem _exportAllFeaturesMenuItem;
     private readonly ToolStripMenuItem _pauseResumeMenuItem;
     private readonly ILoggerFactory _trayLoggerFactory;
     private readonly ILogger<TrayApplicationContext> _logger;
@@ -24,6 +26,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private IHost? _host;
     private ICollectionControl? _collectionControl;
+    private KeyboardCommandService? _keyboardCommandService;
     private volatile bool _hostRunning;
     private int _exiting;
 
@@ -43,6 +46,10 @@ public sealed class TrayApplicationContext : ApplicationContext
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         _statusMenuItem = new ToolStripMenuItem("Status", null, (_, _) => ShowStatus());
+        _exportAllFeaturesMenuItem = new ToolStripMenuItem("Export all features to CSV", null, async (_, _) => await ExportAllFeaturesAsync())
+        {
+            Enabled = false
+        };
         var openSpoolMenuItem = new ToolStripMenuItem("Open spool folder", null, (_, _) => OpenSpoolFolder());
         _pauseResumeMenuItem = new ToolStripMenuItem("Pause collection", null, (_, _) => ToggleCollectionPause())
         {
@@ -60,6 +67,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _notifyIcon.ContextMenuStrip.Items.AddRange([
             _statusMenuItem,
+            _exportAllFeaturesMenuItem,
             openSpoolMenuItem,
             new ToolStripSeparator(),
             _pauseResumeMenuItem,
@@ -88,7 +96,9 @@ public sealed class TrayApplicationContext : ApplicationContext
             await _host.StartAsync();
             _hostRunning = true;
             _collectionControl = _host.Services.GetRequiredService<ICollectionControl>();
+            _keyboardCommandService = _host.Services.GetRequiredService<KeyboardCommandService>();
             _pauseResumeMenuItem.Enabled = true;
+            _exportAllFeaturesMenuItem.Enabled = true;
             _logger.LogInformation("Host started");
             UpdatePauseMenuText();
             UpdateTrayStatusText("EndpointSignalAgent (running)");
@@ -188,6 +198,38 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         UpdatePauseMenuText();
+    }
+
+    private async Task ExportAllFeaturesAsync()
+    {
+        if (_keyboardCommandService is null)
+        {
+            MessageBox.Show("Feature export service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            _logger.LogInformation("Tray menu requested full feature export (equivalent to Ctrl+O)");
+            var result = await _keyboardCommandService.ExportAllFeatureDataAsync(CancellationToken.None);
+
+            if (!result.Success)
+            {
+                MessageBox.Show($"Feature export failed: {result.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var detail = result.FilePath is null
+                ? result.Message
+                : $"{result.Message}\n\nFile:\n{result.FilePath}";
+
+            MessageBox.Show(detail, "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Tray export-all-features action failed");
+            MessageBox.Show($"Feature export failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void UpdatePauseMenuText()
