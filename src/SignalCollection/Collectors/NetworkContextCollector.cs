@@ -1,5 +1,6 @@
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
+using EndpointSignalAgent.SignalCollection.Services;
 using EndpointSignalAgent.SignalCollection.Collectors.Network;
 using Microsoft.Extensions.Logging;
 using System.Net;
@@ -63,10 +64,12 @@ public sealed class NetworkContextCollector : SignalCollectorBase
 
     public NetworkContextCollector(
         ILogger<NetworkContextCollector> logger,
-        ISignalBroadcaster broadcaster)
+        ISignalBroadcaster broadcaster,
+        ICollectionControl collectionControl)
         : this(
             logger,
             broadcaster,
+            collectionControl,
             interfaceSnapshotProvider: null,
             primaryInterfaceResolver: null,
             routeTableReader: null,
@@ -83,6 +86,7 @@ public sealed class NetworkContextCollector : SignalCollectorBase
     internal NetworkContextCollector(
         ILogger<NetworkContextCollector> logger,
         ISignalBroadcaster broadcaster,
+        ICollectionControl collectionControl,
         INetworkInterfaceSnapshotProvider? interfaceSnapshotProvider,
         IPrimaryInterfaceResolver? primaryInterfaceResolver,
         IRouteTableReader? routeTableReader,
@@ -93,7 +97,7 @@ public sealed class NetworkContextCollector : SignalCollectorBase
         VpnDecisionEngine? vpnEngine,
         LocalNetworkFingerprintBuilder? localNetworkBuilder,
         IReadOnlyList<IPublicIpProvider>? publicIpProviders)
-        : base(@"spool\signals.jsonl", broadcaster)
+        : base(@"spool\signals.jsonl", broadcaster, collectionControl)
     {
         _logger = logger;
         _interfaceSnapshotProvider = interfaceSnapshotProvider ?? new NetworkInterfaceSnapshotProvider();
