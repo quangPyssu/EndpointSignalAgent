@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using EndpointSignalAgent.Bootstrap.Configuration;
 using EndpointSignalAgent.Shared.Contracts;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EndpointSignalAgent.Bootstrap.Backend;

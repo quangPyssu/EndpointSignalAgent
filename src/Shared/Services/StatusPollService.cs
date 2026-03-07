@@ -3,6 +3,8 @@ using EndpointSignalAgent.Bootstrap.Backend;
 using EndpointSignalAgent.Bootstrap.Configuration;
 using EndpointSignalAgent.Bootstrap.Identity;
 using EndpointSignalAgent.Shared.Contracts;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EndpointSignalAgent.Shared.Services;
