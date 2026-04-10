@@ -169,6 +169,48 @@ Payload fields:
 
 ---
 
+
+## Collector 4: `SystemResourceCollector`
+
+**Location**: `src/SignalCollection/Collectors/SystemResourceCollector.cs`
+
+### Signals emitted
+
+- `SystemResourceSample` (windowed CPU/RAM/GPU metrics)
+
+### Architecture
+
+- Polling collector (`2s`) with in-memory rolling window (`60s`)
+- Emits every `15s` using current window snapshot
+- Best-effort WMI reads (`System.Management`) with graceful degradation to `0` / `unknown` values
+
+### Payload fields
+
+#### CPU
+- `cpu_mean_pct`
+- `cpu_std_pct`
+- `cpu_max_pct`
+- `cpu_high_ratio`
+- `cpu_idle_ratio`
+- `cpu_spike_count`
+- `cpu_bucket_flip_count`
+
+#### RAM
+- `mem_mean_used_pct`
+- `mem_std_used_pct`
+- `mem_pressure_ratio`
+- `mem_available_bucket`
+- `mem_swap_activity`
+- `mem_range_pct`
+
+#### GPU
+- `gpu_mean_pct`
+- `gpu_active_ratio`
+- `gpu_spike_count`
+- `gpu_mem_used_pct`
+- `gpu_engine_active_count`
+- `gpu_bucket_flip_count`
+
 ## Collector 2: `SessionStateCollector`
 
 **Location**: `src/SignalCollection/Collectors/SessionStateCollector.cs`

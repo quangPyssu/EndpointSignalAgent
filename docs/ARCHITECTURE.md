@@ -16,7 +16,7 @@ Feature extraction runs in parallel as a side consumer of the same live signal s
 ## Runtime Topology (current)
 
 ```
-Collectors (Application/Session/Network)
+Collectors (Application/Session/Network/SystemResource)
         │
         ▼
   SignalCollectorBase.WriteSignalAsync()
@@ -62,6 +62,7 @@ Backend ─► StatusPollService ─► Channel<StatusResponse> ─► DecisionP
 - `SessionStateCollector`
 - `ApplicationUsageCollector`
 - `NetworkContextCollector`
+- `SystemResourceCollector`
 - `BatchProducerService`
 - `BatchSendService`
 - `FeatureExtractorService` (registered as singleton + hosted)

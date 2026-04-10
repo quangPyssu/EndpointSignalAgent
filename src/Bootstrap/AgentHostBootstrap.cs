@@ -147,6 +147,7 @@ public static class AgentHostBootstrap
         builder.Services.AddHostedService<SessionStateCollector>();
         builder.Services.AddHostedService<ApplicationUsageCollector>();
         builder.Services.AddHostedService<NetworkContextCollector>();
+        builder.Services.AddHostedService<SystemResourceCollector>();
 
         builder.Services.AddHostedService<BatchProducerService>();
         builder.Services.AddHostedService<BatchSendService>();
