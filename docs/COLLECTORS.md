@@ -176,7 +176,7 @@ Payload fields:
 
 ### Signals emitted
 
-- `SystemResourceSample` (windowed CPU/RAM/GPU metrics)
+- `SystemResourceSample` (windowed CPU/RAM/GPU/network throughput metrics)
 
 ### Architecture
 
@@ -210,6 +210,13 @@ Payload fields:
 - `gpu_mem_used_pct`
 - `gpu_engine_active_count`
 - `gpu_bucket_flip_count`
+
+#### Network throughput
+- `net_rx_mean_kbps`
+- `net_rx_std_kbps`
+- `net_tx_mean_kbps`
+- `net_tx_std_kbps`
+- `net_upload_ratio`
 
 ## Collector 2: `SessionStateCollector`
 
@@ -537,4 +544,3 @@ from the same broadcast emission.
 ## Platform Notes
 
 Collectors are currently Windows-focused (`user32.dll`, `wlanapi.dll`, `SystemEvents`, Registry).
-

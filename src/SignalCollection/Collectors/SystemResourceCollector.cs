@@ -4,6 +4,7 @@ using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
 using System.Management;
+using System.Net.NetworkInformation;
 
 namespace EndpointSignalAgent.SignalCollection.Collectors;
 
@@ -18,6 +19,9 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private readonly TimeSpan _emitInterval = TimeSpan.FromSeconds(15);
     private readonly List<ResourceSample> _samples = new();
     private DateTimeOffset _lastEmitUtc = DateTimeOffset.MinValue;
+    private long? _previousNetworkBytesReceived;
+    private long? _previousNetworkBytesSent;
+    private DateTimeOffset? _previousNetworkSampleUtc;
 
     private double? _totalPhysicalMemoryMb;
 
@@ -29,7 +33,9 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         double SwapActivityRate,
         double GpuPercent,
         double GpuMemoryUsedPercent,
-        int ActiveGpuEngines);
+        int ActiveGpuEngines,
+        double NetworkRxKbps,
+        double NetworkTxKbps);
 
     public SystemResourceCollector(
         ILogger<SystemResourceCollector> logger,
@@ -84,8 +90,19 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
         var gpuPercent = QueryGpuUsagePercent(out var activeEngines) ?? 0d;
         var gpuMemoryUsedPercent = QueryGpuMemoryUsedPercent() ?? 0d;
+        QueryNetworkKbps(now, out var networkRxKbps, out var networkTxKbps);
 
-        return new ResourceSample(now, cpu, memUsed, availMb, swap, gpuPercent, gpuMemoryUsedPercent, activeEngines);
+        return new ResourceSample(
+            now,
+            cpu,
+            memUsed,
+            availMb,
+            swap,
+            gpuPercent,
+            gpuMemoryUsedPercent,
+            activeEngines,
+            networkRxKbps,
+            networkTxKbps);
     }
 
     private async Task EmitWindowSignalsAsync(DateTimeOffset now)
@@ -98,7 +115,11 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         var cpuSeries = _samples.Select(s => s.CpuPercent).ToArray();
         var memSeries = _samples.Select(s => s.MemoryUsedPercent).ToArray();
         var gpuSeries = _samples.Select(s => s.GpuPercent).ToArray();
+        var networkRxSeries = _samples.Select(s => s.NetworkRxKbps).ToArray();
+        var networkTxSeries = _samples.Select(s => s.NetworkTxKbps).ToArray();
         var latest = _samples[^1];
+        var totalUpload = networkTxSeries.Sum();
+        var totalTraffic = totalUpload + networkRxSeries.Sum();
 
         var payload = new Dictionary<string, string>
         {
@@ -124,7 +145,13 @@ public sealed class SystemResourceCollector : SignalCollectorBase
             ["gpu_spike_count"] = CountSpikes(gpuSeries, 30d).ToString(CultureInfo.InvariantCulture),
             ["gpu_mem_used_pct"] = ToInvariant(latest.GpuMemoryUsedPercent),
             ["gpu_engine_active_count"] = latest.ActiveGpuEngines.ToString(CultureInfo.InvariantCulture),
-            ["gpu_bucket_flip_count"] = CountBucketFlips(gpuSeries, 20d, 60d).ToString(CultureInfo.InvariantCulture)
+            ["gpu_bucket_flip_count"] = CountBucketFlips(gpuSeries, 20d, 60d).ToString(CultureInfo.InvariantCulture),
+
+            ["net_rx_mean_kbps"] = ToInvariant(Mean(networkRxSeries)),
+            ["net_rx_std_kbps"] = ToInvariant(StdDev(networkRxSeries)),
+            ["net_tx_mean_kbps"] = ToInvariant(Mean(networkTxSeries)),
+            ["net_tx_std_kbps"] = ToInvariant(StdDev(networkTxSeries)),
+            ["net_upload_ratio"] = ToInvariant(totalTraffic <= 0d ? 0d : totalUpload / totalTraffic)
         };
 
         await WriteSignalAsync(SignalEventType.SystemResourceSample, payload);
@@ -406,5 +433,51 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         }
 
         return null;
+    }
+
+    private void QueryNetworkKbps(DateTimeOffset now, out double rxKbps, out double txKbps)
+    {
+        rxKbps = 0d;
+        txKbps = 0d;
+
+        try
+        {
+            long totalRxBytes = 0;
+            long totalTxBytes = 0;
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+                    nic.OperationalStatus != OperationalStatus.Up)
+                {
+                    continue;
+                }
+
+                var stats = nic.GetIPv4Statistics();
+                totalRxBytes += stats.BytesReceived;
+                totalTxBytes += stats.BytesSent;
+            }
+
+            if (_previousNetworkSampleUtc is not null &&
+                _previousNetworkBytesReceived is not null &&
+                _previousNetworkBytesSent is not null)
+            {
+                var elapsedSeconds = (now - _previousNetworkSampleUtc.Value).TotalSeconds;
+                if (elapsedSeconds > 0d)
+                {
+                    var rxBytesPerSecond = Math.Max(0d, (totalRxBytes - _previousNetworkBytesReceived.Value) / elapsedSeconds);
+                    var txBytesPerSecond = Math.Max(0d, (totalTxBytes - _previousNetworkBytesSent.Value) / elapsedSeconds);
+                    rxKbps = rxBytesPerSecond * 8d / 1024d;
+                    txKbps = txBytesPerSecond * 8d / 1024d;
+                }
+            }
+
+            _previousNetworkBytesReceived = totalRxBytes;
+            _previousNetworkBytesSent = totalTxBytes;
+            _previousNetworkSampleUtc = now;
+        }
+        catch
+        {
+            // ignored by design - collector emits best-effort values.
+        }
     }
 }
