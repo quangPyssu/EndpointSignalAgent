@@ -117,6 +117,43 @@ public sealed class WindowedFeatureExtractionTests
         Assert.Equal(0.0, cross.Features["app_switches_per_active_min"]);
     }
 
+    [Fact]
+    public void SystemResourceAggregator_ComputesNetworkAndLoadFeatures()
+    {
+        var aggregator = new SystemResourceFeatureAggregator();
+        var window = new SlidingWindow(T("2026-03-05T00:00:00Z"), T("2026-03-05T00:01:00Z"));
+
+        var events = new List<FeatureSignal>
+        {
+            E("2026-03-05T00:00:05Z", SignalEventType.SystemResourceSample, new()
+            {
+                ["cpu_mean_pct"] = "20",
+                ["mem_mean_used_pct"] = "40",
+                ["gpu_mean_pct"] = "5",
+                ["gpu_mem_used_pct"] = "10",
+                ["net_tx_mean_kbps"] = "200",
+                ["net_rx_mean_kbps"] = "800"
+            }),
+            E("2026-03-05T00:00:35Z", SignalEventType.SystemResourceSample, new()
+            {
+                ["cpu_mean_pct"] = "60",
+                ["mem_mean_used_pct"] = "70",
+                ["gpu_mean_pct"] = "15",
+                ["gpu_mem_used_pct"] = "30",
+                ["net_tx_mean_kbps"] = "400",
+                ["net_rx_mean_kbps"] = "600"
+            })
+        };
+
+        var result = aggregator.ExtractFeatures(events, window);
+
+        Assert.Equal(40.0, result.Features["cpu_usage_mean"], 2);
+        Assert.Equal(55.0, result.Features["ram_usage_mean"], 2);
+        Assert.Equal(700.0, result.Features["net_bytes_total_mean"], 2);
+        Assert.Equal(1000.0, result.Features["net_bytes_total_max"], 2);
+        Assert.Equal(1.0, result.Features["has_system_data"], 2);
+    }
+
     private static FeatureSignal E(string ts, SignalEventType type, Dictionary<string, string>? payload = null)
     {
         return new FeatureSignal(T(ts), type, payload ?? new Dictionary<string, string>(StringComparer.Ordinal));

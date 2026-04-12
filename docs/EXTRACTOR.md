@@ -10,7 +10,7 @@ The **FeatureExtractorService** is a component that runs in parallel with the ex
 
 ```
 ┌─────────────────┐
-│   Collectors    │ (Session, App, Network)
+│   Collectors    │ (Session, App, Network, SystemResource)
 └─────────────────┘
          │ writes to
          ▼
@@ -62,7 +62,7 @@ The **FeatureExtractorService** is a component that runs in parallel with the ex
 A `BackgroundService` that:
 - Reads signals from a dedicated broadcast channel (separate from SignalWriterService)
 - Uses **fixed event-time windows** (60s windows, 30s slide)
-- Aggregates features using specialized aggregators (Session, App, Network, Cross)
+- Aggregates features using specialized aggregators (Session, App, Network, Cross, SystemResource)
 - Stores feature rows to SQLite database via FeatureStore
 - Supports both live extraction and on-demand extraction from files
 
@@ -168,6 +168,13 @@ The current base implementation extracts the following features per time window:
 ### Display State Features
 - `display_on_count`: Number of display-on events
 - `display_off_count`: Number of display-off events
+
+### System Resource Features
+- CPU: `cpu_usage_mean`, `cpu_usage_max`, `cpu_usage_std`, `cpu_usage_high_ratio`, `cpu_spike_count`
+- RAM: `ram_usage_mean`, `ram_usage_max`, `ram_usage_std`, `ram_high_usage_ratio`, `ram_pressure_events`
+- GPU: `gpu_available`, `gpu_usage_mean`, `gpu_usage_max`, `gpu_usage_std`, `gpu_memory_usage_mean`, `gpu_high_usage_ratio`
+- Network throughput: `net_bytes_sent_mean`, `net_bytes_recv_mean`, `net_bytes_total_mean`, `net_bytes_total_max`, `net_activity_ratio`, `net_throughput_std`, `net_spike_count`
+- Cross-resource: `system_load_index`, `resource_variability_index`, `cpu_ram_correlation_proxy`, `active_resource_ratio`, `has_system_data`
 
 ## Key Changes to Existing Architecture
 

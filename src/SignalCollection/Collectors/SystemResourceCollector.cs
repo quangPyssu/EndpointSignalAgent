@@ -90,7 +90,10 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
         var gpuPercent = QueryGpuUsagePercent(out var activeEngines) ?? 0d;
         var gpuMemoryUsedPercent = QueryGpuMemoryUsedPercent() ?? 0d;
-        QueryNetworkKbps(now, out var networkRxKbps, out var networkTxKbps);
+        var networkRxKbps = QueryNetworkBytesPerSecond("BytesReceivedPersec")
+            .GetValueOrDefault() * 8d / 1024d;
+        var networkTxKbps = QueryNetworkBytesPerSecond("BytesSentPersec")
+            .GetValueOrDefault() * 8d / 1024d;
 
         return new ResourceSample(
             now,

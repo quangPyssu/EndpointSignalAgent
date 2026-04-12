@@ -3,7 +3,7 @@ Key columns
 - window_sec (fixed: 60)
 - window_start_ts (epoch-aligned, 30s step)
 
-Feature version: 1.1
+Feature version: 1.2
 
 Canonical rule
 - Event-time windows from SignalEvent.ts, not processing time.
@@ -79,7 +79,36 @@ Cross features (explicitly gated)
 - app_switches_per_active_min
 - category_entropy_active
 
+System resource features
+- cpu_usage_mean
+- cpu_usage_max
+- cpu_usage_std
+- cpu_usage_high_ratio
+- cpu_spike_count
+- ram_usage_mean
+- ram_usage_max
+- ram_usage_std
+- ram_high_usage_ratio
+- ram_pressure_events
+- gpu_available
+- gpu_usage_mean
+- gpu_usage_max
+- gpu_usage_std
+- gpu_memory_usage_mean
+- gpu_high_usage_ratio
+- net_bytes_sent_mean
+- net_bytes_recv_mean
+- net_bytes_total_mean
+- net_bytes_total_max
+- net_activity_ratio
+- net_throughput_std
+- net_spike_count
+- system_load_index
+- resource_variability_index
+- cpu_ram_correlation_proxy
+- active_resource_ratio
+- has_system_data
+
 v1 compatibility aliases retained
 - wifi_up_ratio == primary_wifi_connected_ratio
 - local_prefix_change_count == local_network_change_count
-
