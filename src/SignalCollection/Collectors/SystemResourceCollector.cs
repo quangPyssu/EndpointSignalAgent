@@ -438,6 +438,33 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         return null;
     }
 
+    private static double? QueryNetworkBytesPerSecond(string counterName)
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                $"SELECT Name, {counterName} FROM Win32_PerfFormattedData_Tcpip_NetworkInterface");
+
+            var total = 0d;
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                var name = Convert.ToString(obj["Name"], CultureInfo.InvariantCulture) ?? string.Empty;
+                if (name.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                total += Convert.ToDouble(obj[counterName], CultureInfo.InvariantCulture);
+            }
+
+            return Math.Max(0d, total);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void QueryNetworkKbps(DateTimeOffset now, out double rxKbps, out double txKbps)
     {
         rxKbps = 0d;
