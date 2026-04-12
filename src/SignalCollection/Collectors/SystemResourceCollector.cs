@@ -4,6 +4,7 @@ using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
 using System.Management;
+using System.Net.NetworkInformation;
 
 namespace EndpointSignalAgent.SignalCollection.Collectors;
 
@@ -18,6 +19,9 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private readonly TimeSpan _emitInterval = TimeSpan.FromSeconds(15);
     private readonly List<ResourceSample> _samples = new();
     private DateTimeOffset _lastEmitUtc = DateTimeOffset.MinValue;
+    private long? _previousNetworkBytesReceived;
+    private long? _previousNetworkBytesSent;
+    private DateTimeOffset? _previousNetworkSampleUtc;
 
     private double? _totalPhysicalMemoryMb;
 
@@ -434,30 +438,49 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         return null;
     }
 
-    private static double? QueryNetworkBytesPerSecond(string counterName)
+    private void QueryNetworkKbps(DateTimeOffset now, out double rxKbps, out double txKbps)
     {
+        rxKbps = 0d;
+        txKbps = 0d;
+
         try
         {
-            using var searcher = new ManagementObjectSearcher(
-                $"SELECT Name, {counterName} FROM Win32_PerfFormattedData_Tcpip_NetworkInterface");
-
-            var total = 0d;
-            foreach (ManagementObject obj in searcher.Get())
+            long totalRxBytes = 0;
+            long totalTxBytes = 0;
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
             {
-                var name = Convert.ToString(obj["Name"], CultureInfo.InvariantCulture) ?? string.Empty;
-                if (name.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
+                if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+                    nic.OperationalStatus != OperationalStatus.Up)
                 {
                     continue;
                 }
 
-                total += Convert.ToDouble(obj[counterName], CultureInfo.InvariantCulture);
+                var stats = nic.GetIPv4Statistics();
+                totalRxBytes += stats.BytesReceived;
+                totalTxBytes += stats.BytesSent;
             }
 
-            return Math.Max(0d, total);
+            if (_previousNetworkSampleUtc is not null &&
+                _previousNetworkBytesReceived is not null &&
+                _previousNetworkBytesSent is not null)
+            {
+                var elapsedSeconds = (now - _previousNetworkSampleUtc.Value).TotalSeconds;
+                if (elapsedSeconds > 0d)
+                {
+                    var rxBytesPerSecond = Math.Max(0d, (totalRxBytes - _previousNetworkBytesReceived.Value) / elapsedSeconds);
+                    var txBytesPerSecond = Math.Max(0d, (totalTxBytes - _previousNetworkBytesSent.Value) / elapsedSeconds);
+                    rxKbps = rxBytesPerSecond * 8d / 1024d;
+                    txKbps = txBytesPerSecond * 8d / 1024d;
+                }
+            }
+
+            _previousNetworkBytesReceived = totalRxBytes;
+            _previousNetworkBytesSent = totalTxBytes;
+            _previousNetworkSampleUtc = now;
         }
         catch
         {
-            return null;
+            // ignored by design - collector emits best-effort values.
         }
     }
 }
