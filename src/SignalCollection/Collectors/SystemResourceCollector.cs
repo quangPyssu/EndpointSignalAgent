@@ -3,7 +3,7 @@ using EndpointSignalAgent.SignalCollection.Broadcasting;
 using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
-using System.Management;
+using System.Runtime.InteropServices;
 using System.Net.NetworkInformation;
 
 namespace EndpointSignalAgent.SignalCollection.Collectors;
@@ -22,8 +22,55 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private long? _previousNetworkBytesReceived;
     private long? _previousNetworkBytesSent;
     private DateTimeOffset? _previousNetworkSampleUtc;
+    private CpuSampleState _cpuSampleState;
+    private double? _lastCpuPercent;
+    private bool _loggedSystemTimesFailure;
+    private bool _loggedMemoryStatusFailure;
 
     private double? _totalPhysicalMemoryMb;
+
+    private sealed record MemorySnapshot(
+        double MemoryUsedPercent,
+        double AvailableMemoryMb,
+        double TotalPhysicalMemoryMb);
+
+    private struct CpuSampleState
+    {
+        public ulong IdleTicks;
+        public ulong KernelTicks;
+        public ulong UserTicks;
+        public bool HasPreviousSample;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME
+    {
+        public uint DwLowDateTime;
+        public uint DwHighDateTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MEMORYSTATUSEX
+    {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetSystemTimes(
+        out FILETIME idleTime,
+        out FILETIME kernelTime,
+        out FILETIME userTime);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
 
     private sealed record ResourceSample(
         DateTimeOffset TimestampUtc,
@@ -50,6 +97,8 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     {
         Directory.CreateDirectory("spool");
         _logger.LogInformation("SystemResourceCollector started.");
+        _logger.LogInformation("SystemResourceCollector CPU/memory sampling switched to native Win32 APIs.");
+        _logger.LogInformation("SystemResourceCollector GPU and swap collection temporarily disabled during native API migration.");
 
         using var timer = new PeriodicTimer(_pollInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -83,17 +132,17 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private ResourceSample CaptureSample(DateTimeOffset now)
     {
         var cpu = QueryCpuUsagePercent() ?? 0d;
+        var memory = QueryMemorySnapshot();
 
-        var memUsed = QueryMemoryUsedPercent() ?? 0d;
-        var availMb = QueryAvailableMemoryMb() ?? 0d;
-        var swap = QuerySwapActivityRate() ?? 0d;
+        var memUsed = memory?.MemoryUsedPercent ?? 0d;
+        var availMb = memory?.AvailableMemoryMb ?? 0d;
+        _totalPhysicalMemoryMb = memory?.TotalPhysicalMemoryMb ?? _totalPhysicalMemoryMb ?? 0d;
+        var swap = 0d;
 
-        var gpuPercent = QueryGpuUsagePercent(out var activeEngines) ?? 0d;
-        var gpuMemoryUsedPercent = QueryGpuMemoryUsedPercent() ?? 0d;
-        var networkRxKbps = QueryNetworkBytesPerSecond("BytesReceivedPersec")
-            .GetValueOrDefault() * 8d / 1024d;
-        var networkTxKbps = QueryNetworkBytesPerSecond("BytesSentPersec")
-            .GetValueOrDefault() * 8d / 1024d;
+        var gpuPercent = 0d;
+        var gpuMemoryUsedPercent = 0d;
+        var activeEngines = 0;
+        QueryNetworkKbps(now, out var networkRxKbps, out var networkTxKbps);
 
         return new ResourceSample(
             now,
@@ -257,7 +306,6 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
     private string ComputeMemoryAvailableBucket(double availableMb)
     {
-        _totalPhysicalMemoryMb ??= QueryTotalPhysicalMemoryMb() ?? 0d;
         if (_totalPhysicalMemoryMb <= 0)
         {
             return "unknown";
@@ -282,188 +330,84 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         return "healthy";
     }
 
-    private static double? QueryCpuUsagePercent()
+    private double? QueryCpuUsagePercent()
     {
-        try
+        if (!GetSystemTimes(out var idleTime, out var kernelTime, out var userTime))
         {
-            using var searcher = new ManagementObjectSearcher("SELECT PercentProcessorTime FROM Win32_PerfFormattedData_PerfOS_Processor WHERE Name='_Total'");
-            foreach (ManagementObject obj in searcher.Get())
+            if (!_loggedSystemTimesFailure)
             {
-                return Convert.ToDouble(obj["PercentProcessorTime"], CultureInfo.InvariantCulture);
-            }
-        }
-        catch
-        {
-            // ignored by design - collector emits best-effort values.
-        }
-
-        return null;
-    }
-
-    private static double? QueryMemoryUsedPercent()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher("SELECT PercentCommittedBytesInUse FROM Win32_PerfFormattedData_PerfOS_Memory");
-            foreach (ManagementObject obj in searcher.Get())
-            {
-                return Convert.ToDouble(obj["PercentCommittedBytesInUse"], CultureInfo.InvariantCulture);
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static double? QueryAvailableMemoryMb()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher("SELECT AvailableMBytes FROM Win32_PerfFormattedData_PerfOS_Memory");
-            foreach (ManagementObject obj in searcher.Get())
-            {
-                return Convert.ToDouble(obj["AvailableMBytes"], CultureInfo.InvariantCulture);
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static double? QuerySwapActivityRate()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher("SELECT PagesInputPersec, PageReadsPersec FROM Win32_PerfFormattedData_PerfOS_Memory");
-            foreach (ManagementObject obj in searcher.Get())
-            {
-                var pagesInput = Convert.ToDouble(obj["PagesInputPersec"], CultureInfo.InvariantCulture);
-                var pageReads = Convert.ToDouble(obj["PageReadsPersec"], CultureInfo.InvariantCulture);
-                return pagesInput + pageReads;
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static double? QueryGpuUsagePercent(out int activeEngineCount)
-    {
-        activeEngineCount = 0;
-
-        try
-        {
-            using var searcher = new ManagementObjectSearcher("SELECT Name, UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine");
-            var total = 0d;
-            var samples = 0;
-            foreach (ManagementObject obj in searcher.Get())
-            {
-                var name = Convert.ToString(obj["Name"], CultureInfo.InvariantCulture) ?? string.Empty;
-                if (name.Contains("_Total", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var usage = Convert.ToDouble(obj["UtilizationPercentage"], CultureInfo.InvariantCulture);
-                total += usage;
-                samples++;
-                if (usage > 5d)
-                {
-                    activeEngineCount++;
-                }
+                _logger.LogWarning("GetSystemTimes failed; defaulting CPU usage samples to 0 until recovery.");
+                _loggedSystemTimesFailure = true;
             }
 
-            if (samples == 0)
-            {
-                return 0d;
-            }
-
-            return Math.Clamp(total, 0d, 100d);
-        }
-        catch
-        {
             return null;
         }
-    }
 
-    private static double? QueryGpuMemoryUsedPercent()
-    {
-        try
+        _loggedSystemTimesFailure = false;
+
+        var idleTicks = ToUInt64(idleTime);
+        var kernelTicks = ToUInt64(kernelTime);
+        var userTicks = ToUInt64(userTime);
+
+        if (!_cpuSampleState.HasPreviousSample)
         {
-            using var memSearcher = new ManagementObjectSearcher("SELECT DedicatedUsage, SharedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory");
-            double usedBytes = 0d;
-            foreach (ManagementObject obj in memSearcher.Get())
+            _cpuSampleState = new CpuSampleState
             {
-                usedBytes += Convert.ToDouble(obj["DedicatedUsage"], CultureInfo.InvariantCulture);
-                usedBytes += Convert.ToDouble(obj["SharedUsage"], CultureInfo.InvariantCulture);
-            }
+                IdleTicks = idleTicks,
+                KernelTicks = kernelTicks,
+                UserTicks = userTicks,
+                HasPreviousSample = true
+            };
 
-            if (usedBytes <= 0d)
-            {
-                return 0d;
-            }
-
-            // Driver-level dedicated + shared usage can exceed a single adapter capacity,
-            // so this is normalized into a bounded heuristic percentage.
-            var approxPct = usedBytes / (1024d * 1024d * 1024d) * 10d;
-            return Math.Clamp(approxPct, 0d, 100d);
-        }
-        catch
-        {
             return null;
         }
+
+        var idleDelta = idleTicks >= _cpuSampleState.IdleTicks ? idleTicks - _cpuSampleState.IdleTicks : 0UL;
+        var kernelDelta = kernelTicks >= _cpuSampleState.KernelTicks ? kernelTicks - _cpuSampleState.KernelTicks : 0UL;
+        var userDelta = userTicks >= _cpuSampleState.UserTicks ? userTicks - _cpuSampleState.UserTicks : 0UL;
+        var total = kernelDelta + userDelta;
+        var busy = total > idleDelta ? total - idleDelta : 0UL;
+
+        _cpuSampleState.IdleTicks = idleTicks;
+        _cpuSampleState.KernelTicks = kernelTicks;
+        _cpuSampleState.UserTicks = userTicks;
+
+        var cpuPercent = total <= 0
+            ? _lastCpuPercent ?? 0d
+            : (busy / (double)total) * 100d;
+
+        cpuPercent = Math.Clamp(cpuPercent, 0d, 100d);
+        _lastCpuPercent = cpuPercent;
+        return cpuPercent;
     }
 
-    private static double? QueryTotalPhysicalMemoryMb()
+    private MemorySnapshot? QueryMemorySnapshot()
     {
-        try
+        var memoryStatus = new MEMORYSTATUSEX
         {
-            using var searcher = new ManagementObjectSearcher("SELECT TotalVisibleMemorySize FROM Win32_OperatingSystem");
-            foreach (ManagementObject obj in searcher.Get())
+            dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>()
+        };
+
+        if (!GlobalMemoryStatusEx(ref memoryStatus))
+        {
+            if (!_loggedMemoryStatusFailure)
             {
-                var kib = Convert.ToDouble(obj["TotalVisibleMemorySize"], CultureInfo.InvariantCulture);
-                return kib / 1024d;
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static double? QueryNetworkBytesPerSecond(string counterName)
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher(
-                $"SELECT Name, {counterName} FROM Win32_PerfFormattedData_Tcpip_NetworkInterface");
-
-            var total = 0d;
-            foreach (ManagementObject obj in searcher.Get())
-            {
-                var name = Convert.ToString(obj["Name"], CultureInfo.InvariantCulture) ?? string.Empty;
-                if (name.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                total += Convert.ToDouble(obj[counterName], CultureInfo.InvariantCulture);
+                _logger.LogWarning("GlobalMemoryStatusEx failed; defaulting memory usage samples to 0 until recovery.");
+                _loggedMemoryStatusFailure = true;
             }
 
-            return Math.Max(0d, total);
-        }
-        catch
-        {
             return null;
         }
+
+        _loggedMemoryStatusFailure = false;
+        return new MemorySnapshot(
+            memoryStatus.dwMemoryLoad,
+            memoryStatus.ullAvailPhys / 1024d / 1024d,
+            memoryStatus.ullTotalPhys / 1024d / 1024d);
     }
+
+    private static ulong ToUInt64(FILETIME fileTime) =>
+        ((ulong)fileTime.DwHighDateTime << 32) | fileTime.DwLowDateTime;
 
     private void QueryNetworkKbps(DateTimeOffset now, out double rxKbps, out double txKbps)
     {
