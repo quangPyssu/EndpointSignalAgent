@@ -35,6 +35,7 @@ public sealed class FeatureExtractorService : BackgroundService
     private readonly SessionFeatureAggregator _sessionAggregator = new();
     private readonly NetworkFeatureAggregator _networkAggregator = new();
     private readonly CrossFeatureAggregator _crossAggregator = new();
+    private readonly SystemResourceFeatureAggregator _systemResourceAggregator = new();
 
     public FeatureExtractorService(
         ILogger<FeatureExtractorService> logger,
@@ -291,6 +292,7 @@ public sealed class FeatureExtractorService : BackgroundService
         var session = _sessionAggregator.ExtractFeatures(events, window);
         var network = _networkAggregator.ExtractFeatures(events, window);
         var cross = _crossAggregator.ExtractFeatures(window, session, app);
+        var system = _systemResourceAggregator.ExtractFeatures(events, window);
 
         var flat = new Dictionary<string, object>(StringComparer.Ordinal);
 
@@ -298,6 +300,7 @@ public sealed class FeatureExtractorService : BackgroundService
         AddOrdered(flat, FeatureSchema.SessionColumns, session.Features);
         AddOrdered(flat, FeatureSchema.NetworkColumns, network.Features);
         AddOrdered(flat, FeatureSchema.CrossColumns, cross.Features);
+        AddOrdered(flat, FeatureSchema.SystemColumns, system.Features);
 
         return flat;
     }
@@ -399,4 +402,3 @@ public sealed class FeatureExtractorService : BackgroundService
         return signals;
     }
 }
-

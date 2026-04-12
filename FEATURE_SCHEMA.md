@@ -1,4 +1,4 @@
-# Feature Extraction Schema (v1.1)
+# Feature Extraction Schema (v1.2)
 
 ## Windowing Rules
 - Event-time windowing: use `SignalEvent.ts` (broadcast timestamp), never processing time.
@@ -11,6 +11,7 @@
 - Session availability/presence features: only SessionStateCollector signals.
 - Focus/task-switching features: only ApplicationUsageCollector signals.
 - Environment/network features: only NetworkContextCollector signals.
+- System resource features: only SystemResourceCollector signals.
 - Cross features are explicitly gated by session-derived `active_work` intervals.
 
 ## app_window_features (ApplicationUsageCollector only)
@@ -86,6 +87,36 @@ Features:
 - `app_switches_per_active_min`
 - `category_entropy_active`
 
+## system_window_features (SystemResourceCollector only)
+- `cpu_usage_mean`
+- `cpu_usage_max`
+- `cpu_usage_std`
+- `cpu_usage_high_ratio`
+- `cpu_spike_count`
+- `ram_usage_mean`
+- `ram_usage_max`
+- `ram_usage_std`
+- `ram_high_usage_ratio`
+- `ram_pressure_events`
+- `gpu_available`
+- `gpu_usage_mean`
+- `gpu_usage_max`
+- `gpu_usage_std`
+- `gpu_memory_usage_mean`
+- `gpu_high_usage_ratio`
+- `net_bytes_sent_mean`
+- `net_bytes_recv_mean`
+- `net_bytes_total_mean`
+- `net_bytes_total_max`
+- `net_activity_ratio`
+- `net_throughput_std`
+- `net_spike_count`
+- `system_load_index`
+- `resource_variability_index`
+- `cpu_ram_correlation_proxy`
+- `active_resource_ratio`
+- `has_system_data`
+
 ## Data Quality
 Missingness is represented explicitly by:
 - `has_app_data`, `has_idle_data`, `has_display_data`, `has_net_data`
@@ -99,4 +130,3 @@ Legacy columns are still present/compatible:
 - `idle_bucket_mean_sec`, `idle_bucket_max_sec`, `idle_ge_60_ratio`
 - `vpn_on_ratio`, `wifi_up_ratio` (alias of `primary_wifi_connected_ratio`)
 - `local_prefix_change_count` (alias of `local_network_change_count`)
-

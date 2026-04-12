@@ -29,7 +29,9 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         double SwapActivityRate,
         double GpuPercent,
         double GpuMemoryUsedPercent,
-        int ActiveGpuEngines);
+        int ActiveGpuEngines,
+        double NetworkRxKbps,
+        double NetworkTxKbps);
 
     public SystemResourceCollector(
         ILogger<SystemResourceCollector> logger,
@@ -84,8 +86,22 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
         var gpuPercent = QueryGpuUsagePercent(out var activeEngines) ?? 0d;
         var gpuMemoryUsedPercent = QueryGpuMemoryUsedPercent() ?? 0d;
+        var networkRxKbps = QueryNetworkBytesPerSecond("BytesReceivedPersec")
+            .GetValueOrDefault() * 8d / 1024d;
+        var networkTxKbps = QueryNetworkBytesPerSecond("BytesSentPersec")
+            .GetValueOrDefault() * 8d / 1024d;
 
-        return new ResourceSample(now, cpu, memUsed, availMb, swap, gpuPercent, gpuMemoryUsedPercent, activeEngines);
+        return new ResourceSample(
+            now,
+            cpu,
+            memUsed,
+            availMb,
+            swap,
+            gpuPercent,
+            gpuMemoryUsedPercent,
+            activeEngines,
+            networkRxKbps,
+            networkTxKbps);
     }
 
     private async Task EmitWindowSignalsAsync(DateTimeOffset now)
@@ -98,7 +114,11 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         var cpuSeries = _samples.Select(s => s.CpuPercent).ToArray();
         var memSeries = _samples.Select(s => s.MemoryUsedPercent).ToArray();
         var gpuSeries = _samples.Select(s => s.GpuPercent).ToArray();
+        var networkRxSeries = _samples.Select(s => s.NetworkRxKbps).ToArray();
+        var networkTxSeries = _samples.Select(s => s.NetworkTxKbps).ToArray();
         var latest = _samples[^1];
+        var totalUpload = networkTxSeries.Sum();
+        var totalTraffic = totalUpload + networkRxSeries.Sum();
 
         var payload = new Dictionary<string, string>
         {
@@ -124,7 +144,13 @@ public sealed class SystemResourceCollector : SignalCollectorBase
             ["gpu_spike_count"] = CountSpikes(gpuSeries, 30d).ToString(CultureInfo.InvariantCulture),
             ["gpu_mem_used_pct"] = ToInvariant(latest.GpuMemoryUsedPercent),
             ["gpu_engine_active_count"] = latest.ActiveGpuEngines.ToString(CultureInfo.InvariantCulture),
-            ["gpu_bucket_flip_count"] = CountBucketFlips(gpuSeries, 20d, 60d).ToString(CultureInfo.InvariantCulture)
+            ["gpu_bucket_flip_count"] = CountBucketFlips(gpuSeries, 20d, 60d).ToString(CultureInfo.InvariantCulture),
+
+            ["net_rx_mean_kbps"] = ToInvariant(Mean(networkRxSeries)),
+            ["net_rx_std_kbps"] = ToInvariant(StdDev(networkRxSeries)),
+            ["net_tx_mean_kbps"] = ToInvariant(Mean(networkTxSeries)),
+            ["net_tx_std_kbps"] = ToInvariant(StdDev(networkTxSeries)),
+            ["net_upload_ratio"] = ToInvariant(totalTraffic <= 0d ? 0d : totalUpload / totalTraffic)
         };
 
         await WriteSignalAsync(SignalEventType.SystemResourceSample, payload);
@@ -406,5 +432,32 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         }
 
         return null;
+    }
+
+    private static double? QueryNetworkBytesPerSecond(string counterName)
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                $"SELECT Name, {counterName} FROM Win32_PerfFormattedData_Tcpip_NetworkInterface");
+
+            var total = 0d;
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                var name = Convert.ToString(obj["Name"], CultureInfo.InvariantCulture) ?? string.Empty;
+                if (name.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                total += Convert.ToDouble(obj[counterName], CultureInfo.InvariantCulture);
+            }
+
+            return Math.Max(0d, total);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

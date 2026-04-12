@@ -161,6 +161,18 @@ internal static class PayloadValueReader
                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
     }
+
+    public static double GetDouble(IReadOnlyDictionary<string, string> payload, string key, double fallback = 0.0)
+    {
+        if (!payload.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        return double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
+    }
 }
 
 internal static class FeatureMath

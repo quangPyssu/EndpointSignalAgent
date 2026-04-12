@@ -2,7 +2,7 @@ namespace EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 
 internal static class FeatureSchema
 {
-    public const string FeatureVersion = "1.1";
+    public const string FeatureVersion = "1.2";
     public const int WindowSec = 60;
     public const int StepSec = 30;
 
@@ -85,10 +85,43 @@ internal static class FeatureSchema
         "category_entropy_active"
     };
 
+    public static readonly string[] SystemColumns =
+    {
+        "cpu_usage_mean",
+        "cpu_usage_max",
+        "cpu_usage_std",
+        "cpu_usage_high_ratio",
+        "cpu_spike_count",
+        "ram_usage_mean",
+        "ram_usage_max",
+        "ram_usage_std",
+        "ram_high_usage_ratio",
+        "ram_pressure_events",
+        "gpu_available",
+        "gpu_usage_mean",
+        "gpu_usage_max",
+        "gpu_usage_std",
+        "gpu_memory_usage_mean",
+        "gpu_high_usage_ratio",
+        "net_bytes_sent_mean",
+        "net_bytes_recv_mean",
+        "net_bytes_total_mean",
+        "net_bytes_total_max",
+        "net_activity_ratio",
+        "net_throughput_std",
+        "net_spike_count",
+        "system_load_index",
+        "resource_variability_index",
+        "cpu_ram_correlation_proxy",
+        "active_resource_ratio",
+        "has_system_data"
+    };
+
     public static readonly string[] AllColumns = AppColumns
         .Concat(SessionColumns)
         .Concat(NetworkColumns)
         .Concat(CrossColumns)
+        .Concat(SystemColumns)
         .ToArray();
 
     public static readonly IReadOnlyDictionary<string, string> CategoryToColumn = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -109,4 +142,3 @@ internal static class FeatureSchema
         ["other"] = "cat_other_ratio"
     };
 }
-

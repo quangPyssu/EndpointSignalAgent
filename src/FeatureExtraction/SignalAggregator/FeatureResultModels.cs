@@ -40,5 +40,6 @@ internal sealed record SessionFeatureResult(
     IReadOnlyList<SessionInterval> Intervals);
 
 internal sealed record NetworkFeatureResult(Dictionary<string, double> Features);
+internal sealed record SystemResourceFeatureResult(Dictionary<string, double> Features);
 
 internal sealed record CrossFeatureResult(Dictionary<string, double> Features);
