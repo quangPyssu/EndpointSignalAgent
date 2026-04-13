@@ -17,6 +17,7 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(2);
     private readonly TimeSpan _window = TimeSpan.FromSeconds(60);
     private readonly TimeSpan _emitInterval = TimeSpan.FromSeconds(15);
+    private readonly TimeSpan _emitWriteTimeout = TimeSpan.FromSeconds(2);
     private readonly List<ResourceSample> _samples = new();
     private DateTimeOffset _lastEmitUtc = DateTimeOffset.MinValue;
     private long? _previousNetworkBytesReceived;
@@ -26,6 +27,7 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private double? _lastCpuPercent;
     private bool _loggedSystemTimesFailure;
     private bool _loggedMemoryStatusFailure;
+    private bool _loggedEmitTimeout;
 
     private double? _totalPhysicalMemoryMb;
 
@@ -75,10 +77,13 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private sealed record ResourceSample(
         DateTimeOffset TimestampUtc,
         double CpuPercent,
+        bool CpuAvailable,
         double MemoryUsedPercent,
+        bool MemoryAvailable,
         double AvailableMemoryMb,
         double SwapActivityRate,
         double GpuPercent,
+        bool GpuAvailable,
         double GpuMemoryUsedPercent,
         int ActiveGpuEngines,
         double NetworkRxKbps,
@@ -131,15 +136,19 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
     private ResourceSample CaptureSample(DateTimeOffset now)
     {
-        var cpu = QueryCpuUsagePercent() ?? 0d;
-        var memory = QueryMemorySnapshot();
+        var cpuResult = QueryCpuUsagePercent();
+        var cpuAvailable = cpuResult is not null;
+        var cpu = cpuResult ?? 0d;
+        var memoryResult = QueryMemorySnapshot();
 
-        var memUsed = memory?.MemoryUsedPercent ?? 0d;
-        var availMb = memory?.AvailableMemoryMb ?? 0d;
-        _totalPhysicalMemoryMb = memory?.TotalPhysicalMemoryMb ?? _totalPhysicalMemoryMb ?? 0d;
+        var memoryAvailable = memoryResult is not null;
+        var memUsed = memoryResult?.MemoryUsedPercent ?? 0d;
+        var availMb = memoryResult?.AvailableMemoryMb ?? 0d;
+        _totalPhysicalMemoryMb = memoryResult?.TotalPhysicalMemoryMb ?? _totalPhysicalMemoryMb ?? 0d;
         var swap = 0d;
 
         var gpuPercent = 0d;
+        var gpuAvailable = false;
         var gpuMemoryUsedPercent = 0d;
         var activeEngines = 0;
         QueryNetworkKbps(now, out var networkRxKbps, out var networkTxKbps);
@@ -147,10 +156,13 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         return new ResourceSample(
             now,
             cpu,
+            cpuAvailable,
             memUsed,
+            memoryAvailable,
             availMb,
             swap,
             gpuPercent,
+            gpuAvailable,
             gpuMemoryUsedPercent,
             activeEngines,
             networkRxKbps,
@@ -167,15 +179,23 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         var cpuSeries = _samples.Select(s => s.CpuPercent).ToArray();
         var memSeries = _samples.Select(s => s.MemoryUsedPercent).ToArray();
         var gpuSeries = _samples.Select(s => s.GpuPercent).ToArray();
+        var swapSeries = _samples.Select(s => s.SwapActivityRate).ToArray();
         var networkRxSeries = _samples.Select(s => s.NetworkRxKbps).ToArray();
         var networkTxSeries = _samples.Select(s => s.NetworkTxKbps).ToArray();
         var latest = _samples[^1];
         var totalUpload = networkTxSeries.Sum();
         var totalTraffic = totalUpload + networkRxSeries.Sum();
+        var cpuAvailable = _samples.Any(s => s.CpuAvailable);
+        var memoryAvailable = _samples.Any(s => s.MemoryAvailable);
+        var gpuAvailable = _samples.Any(s => s.GpuAvailable);
 
         var payload = new Dictionary<string, string>
         {
             ["window_sec"] = ((int)_window.TotalSeconds).ToString(CultureInfo.InvariantCulture),
+            ["cpu_available"] = cpuAvailable.ToString().ToLowerInvariant(),
+            ["mem_available"] = memoryAvailable.ToString().ToLowerInvariant(),
+            ["gpu_available"] = gpuAvailable.ToString().ToLowerInvariant(),
+            ["swap_available"] = bool.FalseString.ToLowerInvariant(),
 
             ["cpu_mean_pct"] = ToInvariant(Mean(cpuSeries)),
             ["cpu_std_pct"] = ToInvariant(StdDev(cpuSeries)),
@@ -188,8 +208,8 @@ public sealed class SystemResourceCollector : SignalCollectorBase
             ["mem_mean_used_pct"] = ToInvariant(Mean(memSeries)),
             ["mem_std_used_pct"] = ToInvariant(StdDev(memSeries)),
             ["mem_pressure_ratio"] = ToInvariant(Ratio(memSeries, x => x > 85d)),
-            ["mem_available_bucket"] = ComputeMemoryAvailableBucket(latest.AvailableMemoryMb),
-            ["mem_swap_activity"] = ToInvariant(Mean(_samples.Select(s => s.SwapActivityRate))),
+            ["mem_available_bucket"] = ComputeMemoryAvailableBucket(latest.AvailableMemoryMb, latest.MemoryAvailable),
+            ["mem_swap_activity"] = ToInvariant(Mean(swapSeries)),
             ["mem_range_pct"] = ToInvariant(Range(memSeries)),
 
             ["gpu_mean_pct"] = ToInvariant(Mean(gpuSeries)),
@@ -206,7 +226,19 @@ public sealed class SystemResourceCollector : SignalCollectorBase
             ["net_upload_ratio"] = ToInvariant(totalTraffic <= 0d ? 0d : totalUpload / totalTraffic)
         };
 
-        await WriteSignalAsync(SignalEventType.SystemResourceSample, payload);
+        try
+        {
+            await WriteSignalAsync(SignalEventType.SystemResourceSample, payload).WaitAsync(_emitWriteTimeout);
+            _loggedEmitTimeout = false;
+        }
+        catch (TimeoutException)
+        {
+            if (!_loggedEmitTimeout)
+            {
+                _logger.LogWarning("SystemResourceCollector emit timed out after {TimeoutMs} ms; skipping this emit.", _emitWriteTimeout.TotalMilliseconds);
+                _loggedEmitTimeout = true;
+            }
+        }
     }
 
     private void TrimOldSamples(DateTimeOffset now)
@@ -304,9 +336,9 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
     private static string ToInvariant(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
 
-    private string ComputeMemoryAvailableBucket(double availableMb)
+    private string ComputeMemoryAvailableBucket(double availableMb, bool memoryAvailable)
     {
-        if (_totalPhysicalMemoryMb <= 0)
+        if (!memoryAvailable || _totalPhysicalMemoryMb <= 0)
         {
             return "unknown";
         }
