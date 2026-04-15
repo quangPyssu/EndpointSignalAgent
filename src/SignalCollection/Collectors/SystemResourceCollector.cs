@@ -588,22 +588,25 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
         public static PdhGpuSampler? TryCreate(ILogger logger)
         {
-            if (PdhOpenQuery(null, IntPtr.Zero, out var queryHandle) != ErrorSuccess)
+            var openStatus = PdhOpenQuery(null, IntPtr.Zero, out var queryHandle);
+            if (openStatus != ErrorSuccess)
             {
+                logger.LogDebug("PDH GPU query open failed with status 0x{Status:X8}.", openStatus);
                 return null;
             }
 
             try
             {
-                if (!TryAddCounter(queryHandle, @"\GPU Engine(*)\Utilization Percentage", out var engineCounter) ||
-                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Dedicated Usage", out var dedicatedUsageCounter) ||
-                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Dedicated Limit", out var dedicatedLimitCounter) ||
-                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Shared Usage", out var sharedUsageCounter) ||
-                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Shared Limit", out var sharedLimitCounter))
+                if (!TryAddCounter(queryHandle, @"\GPU Engine(*)\Utilization Percentage", out var engineCounter, logger, isRequired: true) ||
+                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Dedicated Usage", out var dedicatedUsageCounter, logger, isRequired: true) ||
+                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Shared Usage", out var sharedUsageCounter, logger, isRequired: true))
                 {
                     PdhCloseQuery(queryHandle);
                     return null;
                 }
+
+                TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Dedicated Limit", out var dedicatedLimitCounter, logger, isRequired: false);
+                TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Shared Limit", out var sharedLimitCounter, logger, isRequired: false);
 
                 _ = PdhCollectQueryData(queryHandle);
                 return new PdhGpuSampler(
@@ -638,12 +641,13 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 
                 if (!TryReadCounterArray(_engineUtilizationCounter, out var engineValues) ||
                     !TryReadCounterArray(_dedicatedUsageCounter, out var dedicatedUsageValues) ||
-                    !TryReadCounterArray(_dedicatedLimitCounter, out var dedicatedLimitValues) ||
-                    !TryReadCounterArray(_sharedUsageCounter, out var sharedUsageValues) ||
-                    !TryReadCounterArray(_sharedLimitCounter, out var sharedLimitValues))
+                    !TryReadCounterArray(_sharedUsageCounter, out var sharedUsageValues))
                 {
                     return false;
                 }
+
+                _ = TryReadCounterArray(_dedicatedLimitCounter, out var dedicatedLimitValues);
+                _ = TryReadCounterArray(_sharedLimitCounter, out var sharedLimitValues);
 
                 var adapterEngineUtilization = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
                 foreach (var (instanceName, value) in engineValues)
@@ -701,12 +705,40 @@ public sealed class SystemResourceCollector : SignalCollectorBase
             _ = PdhCloseQuery(_queryHandle);
         }
 
-        private static bool TryAddCounter(IntPtr queryHandle, string counterPath, out IntPtr counterHandle) =>
-            PdhAddEnglishCounter(queryHandle, counterPath, IntPtr.Zero, out counterHandle) == ErrorSuccess;
+        private static bool TryAddCounter(
+            IntPtr queryHandle,
+            string counterPath,
+            out IntPtr counterHandle,
+            ILogger logger,
+            bool isRequired)
+        {
+            var status = PdhAddEnglishCounter(queryHandle, counterPath, IntPtr.Zero, out counterHandle);
+            if (status == ErrorSuccess)
+            {
+                return true;
+            }
+
+            counterHandle = IntPtr.Zero;
+            if (isRequired)
+            {
+                logger.LogDebug("Required PDH GPU counter {CounterPath} failed with status 0x{Status:X8}.", counterPath, status);
+            }
+            else
+            {
+                logger.LogDebug("Optional PDH GPU counter {CounterPath} unavailable (status 0x{Status:X8}); GPU memory percent may be omitted.", counterPath, status);
+            }
+
+            return !isRequired;
+        }
 
         private static bool TryReadCounterArray(IntPtr counterHandle, out IReadOnlyList<(string InstanceName, double Value)> values)
         {
             values = [];
+            if (counterHandle == IntPtr.Zero)
+            {
+                return false;
+            }
+
             uint bufferSize = 0;
             var status = PdhGetFormattedCounterArray(counterHandle, CounterFormat, ref bufferSize, out var itemCount, IntPtr.Zero);
             if (status != PdhMoreData && status != ErrorSuccess)
