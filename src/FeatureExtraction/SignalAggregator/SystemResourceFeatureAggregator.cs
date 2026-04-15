@@ -123,9 +123,9 @@ internal sealed class SystemResourceFeatureAggregator
 
         features["active_resource_ratio"] = Mean(activeResourceComponents);
 
-        features["cpu_data_available_ratio"] = Ratio(cpuAvailableFlags, x => x);
-        features["mem_data_available_ratio"] = Ratio(memAvailableFlags, x => x);
-        features["gpu_data_available_ratio"] = Ratio(gpuAvailableFlags, x => x);
+        features["cpu_data_available_ratio"] = Ratio(cpuAvailableFlags);
+        features["mem_data_available_ratio"] = Ratio(memAvailableFlags);
+        features["gpu_data_available_ratio"] = Ratio(gpuAvailableFlags);
         features["has_system_data"] = 1d;
 
         return new SystemResourceFeatureResult(features);
@@ -204,6 +204,18 @@ internal sealed class SystemResourceFeatureAggregator
         }
 
         var count = arr.Count(predicate);
+        return count / (double)arr.Length;
+    }
+
+    private static double Ratio(IEnumerable<bool> values)
+    {
+        var arr = values as bool[] ?? values.ToArray();
+        if (arr.Length == 0)
+        {
+            return 0d;
+        }
+
+        var count = arr.Count(v => v);
         return count / (double)arr.Length;
     }
 
