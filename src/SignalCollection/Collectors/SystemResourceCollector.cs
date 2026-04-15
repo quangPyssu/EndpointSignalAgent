@@ -3,8 +3,8 @@ using EndpointSignalAgent.SignalCollection.Broadcasting;
 using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
 
 namespace EndpointSignalAgent.SignalCollection.Collectors;
 
@@ -28,7 +28,6 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     private bool _loggedSystemTimesFailure;
     private bool _loggedMemoryStatusFailure;
     private bool _loggedEmitTimeout;
-
     private double? _totalPhysicalMemoryMb;
 
     private sealed record MemorySnapshot(
@@ -74,6 +73,33 @@ public sealed class SystemResourceCollector : SignalCollectorBase
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
 
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PdhOpenQuery(
+        string? dataSource,
+        IntPtr userData,
+        out IntPtr query);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PdhCloseQuery(IntPtr query);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PdhAddEnglishCounter(
+        IntPtr query,
+        string fullCounterPath,
+        IntPtr userData,
+        out IntPtr counter);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PdhCollectQueryData(IntPtr query);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PdhGetFormattedCounterArray(
+        IntPtr counter,
+        uint format,
+        ref uint bufferSize,
+        out uint itemCount,
+        IntPtr itemBuffer);
+
     private sealed record ResourceSample(
         DateTimeOffset TimestampUtc,
         double CpuPercent,
@@ -103,7 +129,11 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         Directory.CreateDirectory("spool");
         _logger.LogInformation("SystemResourceCollector started.");
         _logger.LogInformation("SystemResourceCollector CPU/memory sampling switched to native Win32 APIs.");
-        _logger.LogInformation("SystemResourceCollector GPU and swap collection temporarily disabled during native API migration.");
+        using var gpuSampler = PdhGpuSampler.TryCreate(_logger);
+        if (gpuSampler is null)
+        {
+            _logger.LogInformation("SystemResourceCollector GPU sampling unavailable; collector will emit fallback GPU values.");
+        }
 
         using var timer = new PeriodicTimer(_pollInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -111,7 +141,7 @@ public sealed class SystemResourceCollector : SignalCollectorBase
             try
             {
                 var now = DateTimeOffset.UtcNow;
-                var sample = CaptureSample(now);
+                var sample = CaptureSample(now, gpuSampler);
                 _samples.Add(sample);
                 TrimOldSamples(now);
 
@@ -134,7 +164,7 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         _logger.LogInformation("SystemResourceCollector stopped.");
     }
 
-    private ResourceSample CaptureSample(DateTimeOffset now)
+    private ResourceSample CaptureSample(DateTimeOffset now, PdhGpuSampler? gpuSampler)
     {
         var cpuResult = QueryCpuUsagePercent();
         var cpuAvailable = cpuResult is not null;
@@ -151,6 +181,14 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         var gpuAvailable = false;
         var gpuMemoryUsedPercent = 0d;
         var activeEngines = 0;
+        if (gpuSampler?.TrySample(out var sampledGpuPercent, out var sampledGpuMemPct, out var sampledActiveEngineCount) == true)
+        {
+            gpuPercent = sampledGpuPercent;
+            gpuMemoryUsedPercent = sampledGpuMemPct;
+            activeEngines = sampledActiveEngineCount;
+            gpuAvailable = true;
+        }
+
         QueryNetworkKbps(now, out var networkRxKbps, out var networkTxKbps);
 
         return new ResourceSample(
@@ -484,6 +522,266 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         catch
         {
             // ignored by design - collector emits best-effort values.
+        }
+    }
+
+    private sealed class PdhGpuSampler : IDisposable
+    {
+        private const uint ErrorSuccess = 0;
+        private const uint PdhMoreData = 0x800007D2;
+        private const uint PdhFmtDouble = 0x00000200;
+        private const uint PdhFmtNoScale = 0x00001000;
+        private const uint PdhFmtNoCap100 = 0x00008000;
+        private const uint CounterStatusValidData = 0x00000000;
+        private const double ActiveEngineThresholdPct = 0.1d;
+        private static readonly uint CounterFormat = PdhFmtDouble | PdhFmtNoScale | PdhFmtNoCap100;
+        private static readonly StringComparison AdapterIdComparison = StringComparison.OrdinalIgnoreCase;
+        private readonly ILogger _logger;
+        private readonly IntPtr _queryHandle;
+        private readonly IntPtr _engineUtilizationCounter;
+        private readonly IntPtr _dedicatedUsageCounter;
+        private readonly IntPtr _dedicatedLimitCounter;
+        private readonly IntPtr _sharedUsageCounter;
+        private readonly IntPtr _sharedLimitCounter;
+
+        private PdhGpuSampler(
+            ILogger logger,
+            IntPtr queryHandle,
+            IntPtr engineUtilizationCounter,
+            IntPtr dedicatedUsageCounter,
+            IntPtr dedicatedLimitCounter,
+            IntPtr sharedUsageCounter,
+            IntPtr sharedLimitCounter)
+        {
+            _logger = logger;
+            _queryHandle = queryHandle;
+            _engineUtilizationCounter = engineUtilizationCounter;
+            _dedicatedUsageCounter = dedicatedUsageCounter;
+            _dedicatedLimitCounter = dedicatedLimitCounter;
+            _sharedUsageCounter = sharedUsageCounter;
+            _sharedLimitCounter = sharedLimitCounter;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PdhFmtCounterValue
+        {
+            public uint CStatus;
+            public double DoubleValue;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PdhFmtCounterValueItem
+        {
+            public IntPtr Name;
+            public PdhFmtCounterValue FmtValue;
+        }
+
+        public static PdhGpuSampler? TryCreate(ILogger logger)
+        {
+            if (PdhOpenQuery(null, IntPtr.Zero, out var queryHandle) != ErrorSuccess)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (!TryAddCounter(queryHandle, @"\GPU Engine(*)\Utilization Percentage", out var engineCounter) ||
+                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Dedicated Usage", out var dedicatedUsageCounter) ||
+                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Dedicated Limit", out var dedicatedLimitCounter) ||
+                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Shared Usage", out var sharedUsageCounter) ||
+                    !TryAddCounter(queryHandle, @"\GPU Adapter Memory(*)\Shared Limit", out var sharedLimitCounter))
+                {
+                    PdhCloseQuery(queryHandle);
+                    return null;
+                }
+
+                _ = PdhCollectQueryData(queryHandle);
+                return new PdhGpuSampler(
+                    logger,
+                    queryHandle,
+                    engineCounter,
+                    dedicatedUsageCounter,
+                    dedicatedLimitCounter,
+                    sharedUsageCounter,
+                    sharedLimitCounter);
+            }
+            catch
+            {
+                PdhCloseQuery(queryHandle);
+                return null;
+            }
+        }
+
+        public bool TrySample(out double gpuPercent, out double gpuMemPct, out int activeEngineCount)
+        {
+            gpuPercent = 0d;
+            gpuMemPct = 0d;
+            activeEngineCount = 0;
+
+            try
+            {
+                var collectStatus = PdhCollectQueryData(_queryHandle);
+                if (collectStatus != ErrorSuccess)
+                {
+                    return false;
+                }
+
+                if (!TryReadCounterArray(_engineUtilizationCounter, out var engineValues) ||
+                    !TryReadCounterArray(_dedicatedUsageCounter, out var dedicatedUsageValues) ||
+                    !TryReadCounterArray(_dedicatedLimitCounter, out var dedicatedLimitValues) ||
+                    !TryReadCounterArray(_sharedUsageCounter, out var sharedUsageValues) ||
+                    !TryReadCounterArray(_sharedLimitCounter, out var sharedLimitValues))
+                {
+                    return false;
+                }
+
+                var adapterEngineUtilization = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (instanceName, value) in engineValues)
+                {
+                    var adapterId = TryGetAdapterId(instanceName);
+                    if (string.IsNullOrEmpty(adapterId))
+                    {
+                        continue;
+                    }
+
+                    if (value > ActiveEngineThresholdPct)
+                    {
+                        activeEngineCount++;
+                    }
+
+                    adapterEngineUtilization[adapterId] = adapterEngineUtilization.GetValueOrDefault(adapterId) + value;
+                }
+
+                gpuPercent = Math.Clamp(adapterEngineUtilization.Values.Sum(), 0d, 100d);
+
+                var dedicatedUsageByAdapter = AggregateByAdapter(dedicatedUsageValues);
+                var sharedUsageByAdapter = AggregateByAdapter(sharedUsageValues);
+                var dedicatedLimitByAdapter = AggregateByAdapter(dedicatedLimitValues);
+                var sharedLimitByAdapter = AggregateByAdapter(sharedLimitValues);
+
+                var totalUsedBytes = 0d;
+                var totalLimitBytes = 0d;
+                foreach (var adapterId in dedicatedUsageByAdapter.Keys
+                    .Concat(sharedUsageByAdapter.Keys)
+                    .Concat(dedicatedLimitByAdapter.Keys)
+                    .Concat(sharedLimitByAdapter.Keys)
+                    .Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    totalUsedBytes += dedicatedUsageByAdapter.GetValueOrDefault(adapterId)
+                        + sharedUsageByAdapter.GetValueOrDefault(adapterId);
+                    totalLimitBytes += dedicatedLimitByAdapter.GetValueOrDefault(adapterId)
+                        + sharedLimitByAdapter.GetValueOrDefault(adapterId);
+                }
+
+                gpuMemPct = totalLimitBytes > 0d
+                    ? Math.Clamp((totalUsedBytes / totalLimitBytes) * 100d, 0d, 100d)
+                    : 0d;
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "PDH GPU sampling failed on this tick; values will be retried.");
+                return false;
+            }
+        }
+
+        public void Dispose()
+        {
+            _ = PdhCloseQuery(_queryHandle);
+        }
+
+        private static bool TryAddCounter(IntPtr queryHandle, string counterPath, out IntPtr counterHandle) =>
+            PdhAddEnglishCounter(queryHandle, counterPath, IntPtr.Zero, out counterHandle) == ErrorSuccess;
+
+        private static bool TryReadCounterArray(IntPtr counterHandle, out IReadOnlyList<(string InstanceName, double Value)> values)
+        {
+            values = [];
+            uint bufferSize = 0;
+            var status = PdhGetFormattedCounterArray(counterHandle, CounterFormat, ref bufferSize, out var itemCount, IntPtr.Zero);
+            if (status != PdhMoreData && status != ErrorSuccess)
+            {
+                return false;
+            }
+
+            if (bufferSize == 0 || itemCount == 0)
+            {
+                return true;
+            }
+
+            var itemSize = Marshal.SizeOf<PdhFmtCounterValueItem>();
+            var buffer = Marshal.AllocHGlobal((int)bufferSize);
+            try
+            {
+                status = PdhGetFormattedCounterArray(counterHandle, CounterFormat, ref bufferSize, out itemCount, buffer);
+                if (status != ErrorSuccess)
+                {
+                    return false;
+                }
+
+                var result = new List<(string InstanceName, double Value)>((int)itemCount);
+                for (var i = 0; i < itemCount; i++)
+                {
+                    var itemPtr = IntPtr.Add(buffer, i * itemSize);
+                    var item = Marshal.PtrToStructure<PdhFmtCounterValueItem>(itemPtr);
+                    if (item.FmtValue.CStatus != CounterStatusValidData || item.Name == IntPtr.Zero)
+                    {
+                        continue;
+                    }
+
+                    var instanceName = Marshal.PtrToStringUni(item.Name);
+                    if (string.IsNullOrWhiteSpace(instanceName))
+                    {
+                        continue;
+                    }
+
+                    var value = double.IsFinite(item.FmtValue.DoubleValue) ? item.FmtValue.DoubleValue : 0d;
+                    result.Add((instanceName, Math.Max(0d, value)));
+                }
+
+                values = result;
+                return true;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        private static Dictionary<string, double> AggregateByAdapter(IReadOnlyList<(string InstanceName, double Value)> values)
+        {
+            var totals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (instanceName, value) in values)
+            {
+                var adapterId = TryGetAdapterId(instanceName);
+                if (string.IsNullOrEmpty(adapterId))
+                {
+                    continue;
+                }
+
+                totals[adapterId] = totals.GetValueOrDefault(adapterId) + value;
+            }
+
+            return totals;
+        }
+
+        private static string? TryGetAdapterId(string instanceName)
+        {
+            if (string.IsNullOrWhiteSpace(instanceName))
+            {
+                return null;
+            }
+
+            var luidIndex = instanceName.IndexOf("luid_", AdapterIdComparison);
+            if (luidIndex < 0)
+            {
+                return null;
+            }
+
+            var physIndex = instanceName.IndexOf("_phys_", luidIndex, AdapterIdComparison);
+            var end = physIndex >= 0 ? physIndex : instanceName.Length;
+            var adapterId = instanceName.Substring(luidIndex, end - luidIndex);
+            return string.IsNullOrWhiteSpace(adapterId) ? null : adapterId;
         }
     }
 }
