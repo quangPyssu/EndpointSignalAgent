@@ -4,6 +4,8 @@
 
 The **FeatureExtractorService** is a component that runs in parallel with the existing signal processing pipeline. It consumes signals from a dedicated broadcast channel and builds time-windowed feature rows for machine learning or analytics purposes. Features are stored in a **SQLite database** with automatic upload tracking and cleanup.
 
+Canonical replay input is now `spool/raw_signals.jsonl` (`raw-collector-v1`). Live extraction still exists for operational compatibility, but offline replay from raw export is the preferred research path.
+
 ## Architecture
 
 ### Data Flow
@@ -30,7 +32,7 @@ The **FeatureExtractorService** is a component that runs in parallel with the ex
 │SignalWriterSvc  │   │ FeatureExtractorSvc│
 │                 │   │                     │
 │→ spool/         │   │→ Event-Time Windows│
-│  signals.jsonl  │   │→ Feature Aggregation│
+│  raw_signals.jsonl │ │→ Feature Aggregation│
 └─────────────────┘   │→ SQLite Storage    │
                       └───────────────────┘
                                  │
@@ -61,7 +63,11 @@ The **FeatureExtractorService** is a component that runs in parallel with the ex
 
 A `BackgroundService` that:
 - Reads signals from a dedicated broadcast channel (separate from SignalWriterService)
-- Uses **fixed event-time windows** (60s windows, 30s slide)
+- Uses fixed live windows (60s/30s) for compatibility
+- Supports offline replay window profiles from file:
+  - `W60_S30` (baseline)
+  - `W120_S60` (secondary)
+  - `W30_S15` (sensitivity)
 - Aggregates features using specialized aggregators (Session, App, Network, Cross, SystemResource)
 - Stores feature rows to SQLite database via FeatureStore
 - Supports both live extraction and on-demand extraction from files
@@ -135,7 +141,7 @@ A `BackgroundService` that automatically deletes old sent features:
 ### 7. **KeyboardCommandService** (`src/FeatureExtraction/Services/KeyboardCommandService.cs`)
 
 A `BackgroundService` that monitors keyboard commands for administrative tasks:
-- **Ctrl+E**: Extract features from all signals in `spool/signals.jsonl` (on-demand extraction)
+- **Ctrl+E**: Extract features from canonical raw data in `spool/raw_signals.jsonl` using default window profiles (`W60_S30`, `W120_S60`, `W30_S15`)
 - **Ctrl+P**: Export unsent features to CSV
 - **Ctrl+O**: Export all features to CSV
 - **Ctrl+Shift+X**: Clear all feature data from database

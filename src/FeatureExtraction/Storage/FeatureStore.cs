@@ -98,6 +98,15 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
                     window_sec INTEGER NOT NULL,
                     window_start_ts TEXT NOT NULL,
                     feature_version TEXT NOT NULL,
+                    window_profile_id TEXT NOT NULL DEFAULT 'W60_S30',
+                    window_size_sec INTEGER NOT NULL DEFAULT 60,
+                    slide_sec INTEGER NOT NULL DEFAULT 30,
+                    event_time_start TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.0000000+00:00',
+                    event_time_end TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.0000000+00:00',
+                    extraction_run_id TEXT NOT NULL DEFAULT '',
+                    feature_schema_version TEXT NOT NULL DEFAULT '1.0',
+                    collector_schema_version TEXT NULL,
+                    source_counts_json TEXT NOT NULL DEFAULT '{}',
                     features_json TEXT NOT NULL,
                     sent_flag INTEGER NOT NULL DEFAULT 0,
                     sent_at TEXT NULL,
@@ -112,6 +121,16 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             using var command = connection.CreateCommand();
             command.CommandText = createTableSql;
             await command.ExecuteNonQueryAsync(ct);
+
+            await EnsureColumnAsync(connection, "window_profile_id", "TEXT NOT NULL DEFAULT 'W60_S30'", ct);
+            await EnsureColumnAsync(connection, "window_size_sec", "INTEGER NOT NULL DEFAULT 60", ct);
+            await EnsureColumnAsync(connection, "slide_sec", "INTEGER NOT NULL DEFAULT 30", ct);
+            await EnsureColumnAsync(connection, "event_time_start", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.0000000+00:00'", ct);
+            await EnsureColumnAsync(connection, "event_time_end", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.0000000+00:00'", ct);
+            await EnsureColumnAsync(connection, "extraction_run_id", "TEXT NOT NULL DEFAULT ''", ct);
+            await EnsureColumnAsync(connection, "feature_schema_version", "TEXT NOT NULL DEFAULT '1.0'", ct);
+            await EnsureColumnAsync(connection, "collector_schema_version", "TEXT NULL", ct);
+            await EnsureColumnAsync(connection, "source_counts_json", "TEXT NOT NULL DEFAULT '{}'", ct);
 
             _initialized = true;
             _logger.LogInformation("FeatureStore database schema initialized");
@@ -132,8 +151,16 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             await connection.OpenAsync(ct);
 
             var sql = @"
-                INSERT INTO feature_rows (device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at)
-                VALUES (@device_id, @window_sec, @window_start_ts, @feature_version, @features_json, @sent_flag, @sent_at);
+                INSERT INTO feature_rows (
+                    device_id, window_sec, window_start_ts, feature_version,
+                    window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end,
+                    extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json,
+                    features_json, sent_flag, sent_at)
+                VALUES (
+                    @device_id, @window_sec, @window_start_ts, @feature_version,
+                    @window_profile_id, @window_size_sec, @slide_sec, @event_time_start, @event_time_end,
+                    @extraction_run_id, @feature_schema_version, @collector_schema_version, @source_counts_json,
+                    @features_json, @sent_flag, @sent_at);
                 SELECT last_insert_rowid();
             ";
 
@@ -143,6 +170,15 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             command.Parameters.AddWithValue("@window_sec", featureRow.WindowSec);
             command.Parameters.AddWithValue("@window_start_ts", featureRow.WindowStartTs.ToString("O")); // ISO 8601
             command.Parameters.AddWithValue("@feature_version", featureRow.FeatureVersion);
+            command.Parameters.AddWithValue("@window_profile_id", featureRow.WindowProfileId);
+            command.Parameters.AddWithValue("@window_size_sec", featureRow.WindowSizeSec);
+            command.Parameters.AddWithValue("@slide_sec", featureRow.SlideSec);
+            command.Parameters.AddWithValue("@event_time_start", featureRow.EventTimeStart.ToString("O"));
+            command.Parameters.AddWithValue("@event_time_end", featureRow.EventTimeEnd.ToString("O"));
+            command.Parameters.AddWithValue("@extraction_run_id", featureRow.ExtractionRunId);
+            command.Parameters.AddWithValue("@feature_schema_version", featureRow.FeatureSchemaVersion);
+            command.Parameters.AddWithValue("@collector_schema_version", featureRow.CollectorSchemaVersion ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@source_counts_json", JsonSerializer.Serialize(featureRow.SourceCounts));
             command.Parameters.AddWithValue("@features_json", JsonSerializer.Serialize(featureRow.Features));
             command.Parameters.AddWithValue("@sent_flag", featureRow.SentFlag ? 1 : 0);
             command.Parameters.AddWithValue("@sent_at", featureRow.SentAt?.ToString("O") ?? (object)DBNull.Value);
@@ -171,7 +207,7 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             await connection.OpenAsync(ct);
 
             var sql = @"
-                SELECT id, device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
                 FROM feature_rows
                 WHERE sent_flag = 0
                 ORDER BY window_start_ts ASC
@@ -252,7 +288,7 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
 
             var placeholders = string.Join(",", idList.Select((_, i) => $"@id{i}"));
             var sql = $@"
-                SELECT id, device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
                 FROM feature_rows
                 WHERE id IN ({placeholders})
             ";
@@ -292,7 +328,7 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             await connection.OpenAsync(ct);
 
             var sql = @"
-                SELECT id, device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
                 FROM feature_rows
                 WHERE window_start_ts >= @start AND window_start_ts <= @end
                 ORDER BY window_start_ts ASC
@@ -330,7 +366,7 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             await connection.OpenAsync(ct);
 
             var sql = @"
-                SELECT id, device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
                 FROM feature_rows
                 ORDER BY window_start_ts DESC
                 LIMIT @count
@@ -399,7 +435,7 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             await connection.OpenAsync(ct);
 
             var sql = @"
-                SELECT id, device_id, window_sec, window_start_ts, feature_version, features_json, sent_flag, sent_at
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
                 FROM feature_rows
                 ORDER BY window_start_ts ASC
                 LIMIT @limit
@@ -460,19 +496,43 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
         var windowSec = reader.GetInt32(2);
         var windowStartTs = DateTimeOffset.Parse(reader.GetString(3));
         var featureVersion = reader.GetString(4);
-        var featuresJson = reader.GetString(5);
-        var sentFlag = reader.GetInt32(6) == 1;
-        var sentAt = reader.IsDBNull(7) ? (DateTimeOffset?)null : DateTimeOffset.Parse(reader.GetString(7));
+        var windowProfileId = reader.IsDBNull(5) ? "W60_S30" : reader.GetString(5);
+        var windowSizeSec = reader.IsDBNull(6) ? windowSec : reader.GetInt32(6);
+        var slideSec = reader.IsDBNull(7) ? 30 : reader.GetInt32(7);
+        var eventTimeStart = reader.IsDBNull(8) ? windowStartTs : DateTimeOffset.Parse(reader.GetString(8));
+        var eventTimeEnd = reader.IsDBNull(9) ? windowStartTs.AddSeconds(windowSec) : DateTimeOffset.Parse(reader.GetString(9));
+        var extractionRunId = reader.IsDBNull(10) ? "legacy" : reader.GetString(10);
+        var featureSchemaVersion = reader.IsDBNull(11) ? featureVersion : reader.GetString(11);
+        var collectorSchemaVersion = reader.IsDBNull(12) ? null : reader.GetString(12);
+        var sourceCountsJson = reader.IsDBNull(13) ? "{}" : reader.GetString(13);
+        var featuresJson = reader.GetString(14);
+        var sentFlag = reader.GetInt32(15) == 1;
+        var sentAt = reader.IsDBNull(16) ? (DateTimeOffset?)null : DateTimeOffset.Parse(reader.GetString(16));
 
-        var features = JsonSerializer.Deserialize<Dictionary<string, object>>(featuresJson) 
+        var sourceCounts = JsonSerializer.Deserialize<Dictionary<string, int>>(sourceCountsJson)
+            ?? new Dictionary<string, int>();
+        var features = JsonSerializer.Deserialize<Dictionary<string, object>>(featuresJson)
             ?? new Dictionary<string, object>();
 
-        return new FeatureRow(id, deviceId, windowSec, windowStartTs, featureVersion, features, sentFlag, sentAt);
+        return new FeatureRow(id, deviceId, windowSec, windowStartTs, featureVersion, windowProfileId, windowSizeSec, slideSec, eventTimeStart, eventTimeEnd, extractionRunId, featureSchemaVersion, collectorSchemaVersion, sourceCounts, features, sentFlag, sentAt);
     }
 
     public void Dispose()
     {
         _initLock?.Dispose();
     }
-}
 
+    private static async Task EnsureColumnAsync(SqliteConnection connection, string columnName, string sqlType, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"ALTER TABLE feature_rows ADD COLUMN {columnName} {sqlType};";
+        try
+        {
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+        {
+            // Already migrated.
+        }
+    }
+}

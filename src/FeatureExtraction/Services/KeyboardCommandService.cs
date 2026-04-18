@@ -44,7 +44,7 @@ public sealed class KeyboardCommandService : BackgroundService
             {
                 _logger.LogInformation("Keyboard monitoring started.");
                 Console.WriteLine("\n[Commands]");
-                Console.WriteLine("  Ctrl+E       - Extract features from all signals in signals.jsonl");
+                Console.WriteLine("  Ctrl+E       - Extract features from canonical raw_signals.jsonl (W60_S30, W120_S60, W30_S15)");
                 Console.WriteLine("  Ctrl+P       - Export unsent feature data to CSV");
                 Console.WriteLine("  Ctrl+O       - Export all feature data to CSV");
                 Console.WriteLine("  Ctrl+Shift+X - Clear all feature data from database\n");
@@ -106,7 +106,7 @@ public sealed class KeyboardCommandService : BackgroundService
     {
         try
         {
-            var spoolPath = Path.Combine(Directory.GetCurrentDirectory(), "spool", "signals.jsonl");
+            var spoolPath = Path.Combine(Directory.GetCurrentDirectory(), "spool", "raw_signals.jsonl");
 
             if (!File.Exists(spoolPath))
             {

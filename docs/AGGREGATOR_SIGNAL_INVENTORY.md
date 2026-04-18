@@ -1,5 +1,7 @@
 # Aggregator Signal Inventory
 
+> Migration note: canonical collector export for replay is now `spool/raw_signals.jsonl` with schema `raw-collector-v1`. Legacy `spool/signals.jsonl` remains for backend send compatibility during migration.
+
 This document lists the signals emitted by collectors that are consumed by the feature aggregators.
 
 Scope:

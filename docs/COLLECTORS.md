@@ -21,7 +21,7 @@ SignalCollectorBase.WriteSignalAsync()
         ▼
 ISignalBroadcaster
   ├──► SignalWriter channel (bounded, wait)
-  │      └──► SignalWriterService ─► SpoolFileCollector ─► spool/signals.jsonl
+  │      └──► SignalWriterService ─► SpoolFileCollector + RawSignalFileCollector ─► spool/signals.jsonl + spool/raw_signals.jsonl
   └──► FeatureExtractor channel (bounded, wait)
          └──► FeatureExtractorService (live feature windows)
 ```
@@ -147,6 +147,11 @@ Payload fields:
 - `windowSec` (always `60`)
 - `switches` (count of **committed** app switches in window)
 - `collectorMode`
+
+Raw export provenance:
+- `signal_kind=pre_aggregated`
+- `native_aggregation_sec=60`
+- `native_cadence_sec=1`
 
 **Important**: Only counts switches between different apps. Rejected/debounced transient switches are not counted.
 
@@ -297,6 +302,8 @@ Payload fields (normal):
 - `idleMs` (milliseconds since last input)
 - `idleBucketSec` (bucketed idle time in seconds)
 - `idleStatus` (`ok` or `api_fail`)
+- `idlePollMode` (`fast` for nominal 2s polling, `slow` for reduced 30s polling)
+- `expectedCadenceSec` (`2` or `30`)
 - `userPresence` (if available, e.g., `present`, `away`)
 - `presenceSource` (if available, e.g., `GUID_SESSION_USER_PRESENCE`)
 

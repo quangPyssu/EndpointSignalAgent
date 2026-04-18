@@ -7,6 +7,7 @@ using EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 using EndpointSignalAgent.FeatureExtraction.Storage;
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.SignalCollection.Broadcasting;
+using EndpointSignalAgent.SignalCollection.Contracts;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -36,6 +37,7 @@ public sealed class FeatureExtractorService : BackgroundService
     private readonly NetworkFeatureAggregator _networkAggregator = new();
     private readonly CrossFeatureAggregator _crossAggregator = new();
     private readonly SystemResourceFeatureAggregator _systemResourceAggregator = new();
+    private readonly string _liveExtractionRunId = Guid.NewGuid().ToString("N");
 
     public FeatureExtractorService(
         ILogger<FeatureExtractorService> logger,
@@ -191,6 +193,15 @@ public sealed class FeatureExtractorService : BackgroundService
                     windowSec: FeatureSchema.WindowSec,
                     windowStartTs: job.Window.StartUtc,
                     featureVersion: FeatureSchema.FeatureVersion,
+                    windowProfileId: WindowProfile.W60S30.ProfileId,
+                    windowSizeSec: FeatureSchema.WindowSec,
+                    slideSec: FeatureSchema.StepSec,
+                    eventTimeStart: job.Window.StartUtc,
+                    eventTimeEnd: job.Window.EndUtc,
+                    extractionRunId: _liveExtractionRunId,
+                    featureSchemaVersion: FeatureSchema.FeatureVersion,
+                    collectorSchemaVersion: null,
+                    sourceCounts: BuildSourceCounts(job.Context),
                     features: features);
 
                 await _featureStore.StoreAsync(row, ct);
@@ -315,6 +326,11 @@ public sealed class FeatureExtractorService : BackgroundService
 
     public async Task ExtractFeaturesFromFileAsync(string jsonlPath, CancellationToken ct)
     {
+        await ExtractFeaturesFromFileAsync(jsonlPath, WindowProfile.DefaultProfiles, ct);
+    }
+
+    public async Task ExtractFeaturesFromFileAsync(string jsonlPath, IReadOnlyList<WindowProfile> profiles, CancellationToken ct)
+    {
         _logger.LogInformation("Starting on-demand feature extraction from {Path}", jsonlPath);
 
         if (!File.Exists(jsonlPath))
@@ -331,38 +347,52 @@ public sealed class FeatureExtractorService : BackgroundService
             return;
         }
 
-        var minTs = allSignals.Min(s => s.TimestampUtc);
-        var maxTs = allSignals.Max(s => s.TimestampUtc);
-
-        var firstStart = SlidingWindowing.AlignToStepUtc(minTs, FeatureSchema.StepSec) - TimeSpan.FromSeconds(FeatureSchema.StepSec);
-        var lastCompleteStart = SlidingWindowing.AlignToStepUtc(maxTs - TimeSpan.FromSeconds(FeatureSchema.WindowSec), FeatureSchema.StepSec);
-
+        var extractionRunId = Guid.NewGuid().ToString("N");
         var count = 0;
-        foreach (var window in SlidingWindowing.EnumerateWindowStarts(firstStart, lastCompleteStart, FeatureSchema.WindowSec, FeatureSchema.StepSec))
+
+        foreach (var profile in profiles)
         {
-            var historyStart = window.StartUtc - TimeSpan.FromSeconds(FeatureSchema.WindowSec + FeatureSchema.StepSec);
-            var context = allSignals
-                .Where(e => e.TimestampUtc >= historyStart && e.TimestampUtc < window.EndUtc)
-                .ToList();
+            var minTs = allSignals.Min(s => s.TimestampUtc);
+            var maxTs = allSignals.Max(s => s.TimestampUtc);
+            var firstStart = SlidingWindowing.AlignToStepUtc(minTs, profile.SlideSec) - TimeSpan.FromSeconds(profile.SlideSec);
+            var lastCompleteStart = SlidingWindowing.AlignToStepUtc(maxTs - TimeSpan.FromSeconds(profile.WindowSizeSec), profile.SlideSec);
 
-            if (context.Count == 0)
+            foreach (var window in SlidingWindowing.EnumerateWindowStarts(firstStart, lastCompleteStart, profile.WindowSizeSec, profile.SlideSec))
             {
-                continue;
+                var historyStart = window.StartUtc - TimeSpan.FromSeconds(profile.WindowSizeSec + profile.SlideSec);
+                var context = allSignals
+                    .Where(e => e.TimestampUtc >= historyStart && e.TimestampUtc < window.EndUtc)
+                    .Where(e => ShouldIncludeSignal(e, profile))
+                    .ToList();
+
+                if (context.Count == 0)
+                {
+                    continue;
+                }
+
+                var features = ExtractWindowFeatures(context, window);
+                var row = FeatureRow.CreateNew(
+                    deviceId: deviceId,
+                    windowSec: profile.WindowSizeSec,
+                    windowStartTs: window.StartUtc,
+                    featureVersion: FeatureSchema.FeatureVersion,
+                    windowProfileId: profile.ProfileId,
+                    windowSizeSec: profile.WindowSizeSec,
+                    slideSec: profile.SlideSec,
+                    eventTimeStart: window.StartUtc,
+                    eventTimeEnd: window.EndUtc,
+                    extractionRunId: extractionRunId,
+                    featureSchemaVersion: FeatureSchema.FeatureVersion,
+                    collectorSchemaVersion: "mixed",
+                    sourceCounts: BuildSourceCounts(context),
+                    features: features);
+
+                await _featureStore.StoreAsync(row, ct);
+                count++;
             }
-
-            var features = ExtractWindowFeatures(context, window);
-            var row = FeatureRow.CreateNew(
-                deviceId: deviceId,
-                windowSec: FeatureSchema.WindowSec,
-                windowStartTs: window.StartUtc,
-                featureVersion: FeatureSchema.FeatureVersion,
-                features: features);
-
-            await _featureStore.StoreAsync(row, ct);
-            count++;
         }
 
-        _logger.LogInformation("On-demand extraction complete: created {Count} windows from {SignalCount} signals", count, allSignals.Count);
+        _logger.LogInformation("On-demand extraction complete: created {Count} windows from {SignalCount} signals across {ProfileCount} profile(s)", count, allSignals.Count, profiles.Count);
     }
 
     private async Task<List<FeatureSignal>> ReadSignalsFromFileAsync(string jsonlPath, CancellationToken ct)
@@ -381,8 +411,14 @@ public sealed class FeatureExtractorService : BackgroundService
 
             try
             {
+                if (TryParseRawRecord(line, out var rawSignal))
+                {
+                    signals.Add(rawSignal);
+                    continue;
+                }
+
                 var ev = System.Text.Json.JsonSerializer.Deserialize<SignalEvent>(line);
-                if (ev is null)
+                if (ev is null || ev.Payload is null)
                 {
                     continue;
                 }
@@ -400,5 +436,66 @@ public sealed class FeatureExtractorService : BackgroundService
 
         signals.Sort((a, b) => a.TimestampUtc.CompareTo(b.TimestampUtc));
         return signals;
+    }
+
+    private static bool TryParseRawRecord(string line, out FeatureSignal featureSignal)
+    {
+        featureSignal = default;
+        try
+        {
+            var raw = System.Text.Json.JsonSerializer.Deserialize<RawCollectorSignalRecord>(line);
+            if (raw is null || !string.Equals(raw.SchemaVersion, SignalProvenanceCatalog.RawSchemaVersion, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!SignalEventTypeParser.TryParse(raw.SignalType, out var type) || raw.Payload is null)
+            {
+                return false;
+            }
+
+            featureSignal = new FeatureSignal(
+                raw.TimestampUtc,
+                type,
+                new Dictionary<string, string>(raw.Payload, StringComparer.Ordinal),
+                raw.NativeAggregationSec);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ShouldIncludeSignal(FeatureSignal signal, WindowProfile profile)
+    {
+        if (!signal.NativeAggregationSec.HasValue || signal.NativeAggregationSec <= 0)
+        {
+            return true;
+        }
+
+        var native = signal.NativeAggregationSec.Value;
+        if (native > profile.WindowSizeSec)
+        {
+            return false;
+        }
+
+        if (native == profile.WindowSizeSec)
+        {
+            return true;
+        }
+
+        return profile.WindowSizeSec % native == 0;
+    }
+
+    private static Dictionary<string, int> BuildSourceCounts(IReadOnlyList<FeatureSignal> context)
+    {
+        return new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["application"] = context.Count(s => s.Type is SignalEventType.ForegroundAppChanged or SignalEventType.AppDwell or SignalEventType.AppSwitchRate),
+            ["session"] = context.Count(s => s.Type is SignalEventType.SessionLock or SignalEventType.SessionUnlock or SignalEventType.IdleSample or SignalEventType.ScreenSaverOn or SignalEventType.ScreenSaverOff or SignalEventType.DisplayOn or SignalEventType.DisplayOff or SignalEventType.DisplayDimmed),
+            ["network"] = context.Count(s => s.Type is SignalEventType.VpnStateChanged or SignalEventType.WifiLinkChanged or SignalEventType.WifiSsidChanged or SignalEventType.LocalNetworkChanged or SignalEventType.PublicIpBucketChanged),
+            ["system"] = context.Count(s => s.Type is SignalEventType.SystemResourceSample)
+        };
     }
 }

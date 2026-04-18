@@ -13,6 +13,15 @@ public sealed record FeatureRow(
     [property: JsonPropertyName("window_sec")] int WindowSec,
     [property: JsonPropertyName("window_start_ts")] DateTimeOffset WindowStartTs,
     [property: JsonPropertyName("feature_version")] string FeatureVersion,
+    [property: JsonPropertyName("window_profile_id")] string WindowProfileId,
+    [property: JsonPropertyName("window_size_sec")] int WindowSizeSec,
+    [property: JsonPropertyName("slide_sec")] int SlideSec,
+    [property: JsonPropertyName("event_time_start")] DateTimeOffset EventTimeStart,
+    [property: JsonPropertyName("event_time_end")] DateTimeOffset EventTimeEnd,
+    [property: JsonPropertyName("extraction_run_id")] string ExtractionRunId,
+    [property: JsonPropertyName("feature_schema_version")] string FeatureSchemaVersion,
+    [property: JsonPropertyName("collector_schema_version")] string? CollectorSchemaVersion,
+    [property: JsonPropertyName("source_counts")] Dictionary<string, int> SourceCounts,
     [property: JsonPropertyName("features")] Dictionary<string, object> Features,
     [property: JsonPropertyName("sent_flag")] bool SentFlag,
     [property: JsonPropertyName("sent_at")] DateTimeOffset? SentAt
@@ -26,6 +35,15 @@ public sealed record FeatureRow(
         int windowSec,
         DateTimeOffset windowStartTs,
         string featureVersion,
+        string windowProfileId,
+        int windowSizeSec,
+        int slideSec,
+        DateTimeOffset eventTimeStart,
+        DateTimeOffset eventTimeEnd,
+        string extractionRunId,
+        string featureSchemaVersion,
+        string? collectorSchemaVersion,
+        Dictionary<string, int> sourceCounts,
         Dictionary<string, object> features)
     {
         return new FeatureRow(
@@ -34,10 +52,18 @@ public sealed record FeatureRow(
             WindowSec: windowSec,
             WindowStartTs: windowStartTs,
             FeatureVersion: featureVersion,
+            WindowProfileId: windowProfileId,
+            WindowSizeSec: windowSizeSec,
+            SlideSec: slideSec,
+            EventTimeStart: eventTimeStart,
+            EventTimeEnd: eventTimeEnd,
+            ExtractionRunId: extractionRunId,
+            FeatureSchemaVersion: featureSchemaVersion,
+            CollectorSchemaVersion: collectorSchemaVersion,
+            SourceCounts: sourceCounts,
             Features: features,
             SentFlag: false,
             SentAt: null
         );
     }
 }
-

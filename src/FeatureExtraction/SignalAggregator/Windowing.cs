@@ -5,7 +5,8 @@ namespace EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 internal readonly record struct FeatureSignal(
     DateTimeOffset TimestampUtc,
     SignalEventType Type,
-    IReadOnlyDictionary<string, string> Payload);
+    IReadOnlyDictionary<string, string> Payload,
+    int? NativeAggregationSec = null);
 
 internal readonly record struct SlidingWindow(DateTimeOffset StartUtc, DateTimeOffset EndUtc)
 {

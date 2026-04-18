@@ -417,10 +417,22 @@ public sealed class SessionStateCollector : SignalCollectorBase
 
     private void EnqueueSignal(SignalEventType type, Dictionary<string, string> payload)
     {
+        if (type == SignalEventType.IdleSample)
+        {
+            EnrichIdlePayload(payload);
+        }
+
         if (!_signalQueue.Writer.TryWrite(new QueuedSignal(type, payload)))
         {
             _logger.LogWarning("SessionStateCollector: failed to enqueue signal type {Type}", type);
         }
+    }
+
+    private void EnrichIdlePayload(Dictionary<string, string> payload)
+    {
+        var isSlowMode = _isSessionLocked || string.Equals(_userPresence, "away", StringComparison.OrdinalIgnoreCase);
+        payload["idlePollMode"] = isSlowMode ? "slow" : "fast";
+        payload["expectedCadenceSec"] = isSlowMode ? "30" : "2";
     }
 
     private async Task ProcessSignalQueueAsync(CancellationToken ct)

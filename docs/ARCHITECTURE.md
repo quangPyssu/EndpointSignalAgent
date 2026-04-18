@@ -9,7 +9,7 @@ The agent is a Windows Worker Service built on .NET 8. Runtime behavior is organ
 3. **Signal send**: spool reader batches and sends events to backend.
 4. **Status + decisions**: poll backend and process status decisions.
 
-Feature extraction runs in parallel as a side consumer of the same live signal stream.
+Feature extraction runs in parallel as a side consumer of the same live signal stream, but canonical research export is now raw collector JSONL (`spool/raw_signals.jsonl`).
 
 ---
 
@@ -23,10 +23,11 @@ Collectors (Application/Session/Network/SystemResource)
         │
         ▼
      ISignalBroadcaster
-      ├──────────────► Channel #1 (SignalWriter) ─► SignalWriterService ─► spool/signals.jsonl
+      ├──────────────► Channel #1 (SignalWriter) ─► SignalWriterService ─► spool/signals.jsonl (compat) + spool/raw_signals.jsonl (canonical)
       └──────────────► Channel #2 (FeatureExtractor) ─► FeatureExtractorService (live)
 
 spool/signals.jsonl ─► SpoolFileSignalProvider ─► BatchProducerService ─► Channel<SignalBatchRequest> ─► BatchSendService ─► Backend
+spool/raw_signals.jsonl ─► Offline replay extraction (window profiles: W60_S30, W120_S60, W30_S15)
 
 Backend ─► StatusPollService ─► Channel<StatusResponse> ─► DecisionProcessorService ─► IDecisionHandler
 ```
@@ -99,7 +100,9 @@ Backend ─► StatusPollService ─► Channel<StatusResponse> ─► DecisionP
 
 ### Disk persistence side
 
-- `SignalWriterService` reads the writer channel and appends JSONL records using `SpoolFileCollector`.
+- `SignalWriterService` reads the writer channel and dual-writes:
+  - legacy send-compatible `spool/signals.jsonl` (old schema),
+  - canonical replay-friendly `spool/raw_signals.jsonl` (`raw-collector-v1` envelope with signal provenance).
 
 ### Send side
 
