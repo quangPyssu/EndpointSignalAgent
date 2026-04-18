@@ -1,5 +1,16 @@
 # EndpointSignalAgent
 
+Windows tray application that collects endpoint signals, writes local spool artifacts, extracts windowed features, and optionally sends data to backend services.
+
+## Start here (for contributors/agents)
+
+1. Read **`docs/AGENT_GUIDE.md`** for a top-down map of runtime flows and key files.
+2. Read **`docs/ARCHITECTURE.md`** for DI wiring, channels, and hosted services.
+3. Use domain docs as needed:
+   - `docs/COLLECTORS.md`
+   - `docs/EXTRACTOR.md`
+   - `docs/AGGREGATOR_SIGNAL_INVENTORY.md`
+
 ## Running as a Windows tray app
 
 1. Build and run:
@@ -13,7 +24,15 @@
    - **Open spool folder**
    - **Pause collection / Resume collection**
    - **Exit**
-4. Use **Exit** for graceful shutdown of all hosted services.
+4. Use **Exit** for graceful shutdown of hosted services.
+
+## Runtime artifacts (`spool/`)
+
+- `enrollment.json`
+- `signals.jsonl`
+- `signals.offset`
+- `raw_signals.jsonl`
+- `features.db`
 
 ## Smooth setup for "start at user logon"
 
@@ -29,8 +48,6 @@ When you export/publish the app, include these files next to `EndpointSignalAgen
 Then users can simply double-click:
 - `install-logon-startup.cmd` to register startup
 - `remove-logon-startup.cmd` to unregister startup
-
-No manual README steps are required for the end user in this mode.
 
 ### Option B (from repo): direct scripts
 
@@ -59,14 +76,3 @@ Optional example with self-contained output:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\export-app-with-startup-tools.ps1 -Runtime win-x64 -SelfContained
 ```
-
-## Verify tray startup and pipeline behavior
-
-- Sign out/in (or run task manually via Task Scheduler).
-- Confirm tray icon appears.
-- Open **Status** and verify host is running.
-- Verify spool artifacts are updating:
-  - `spool\signals.jsonl`
-  - `spool\signals.offset`
-  - `spool\features.db`
-- Use tray **Exit** and verify process ends cleanly.

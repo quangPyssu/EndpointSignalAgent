@@ -1,372 +1,144 @@
-# Feature Extractor Component
+# Feature Extraction (Current)
 
-## Overview
+## Purpose
 
-The **FeatureExtractorService** is a component that runs in parallel with the existing signal processing pipeline. It consumes signals from a dedicated broadcast channel and builds time-windowed feature rows for machine learning or analytics purposes. Features are stored in a **SQLite database** with automatic upload tracking and cleanup.
+`FeatureExtractorService` consumes the live broadcast signal stream and produces windowed feature rows for analytics/ML. Rows are persisted in SQLite and optionally uploaded to backend.
 
-Canonical replay input is now `spool/raw_signals.jsonl` (`raw-collector-v1`). Live extraction still exists for operational compatibility, but offline replay from raw export is the preferred research path.
+Primary files:
 
-## Architecture
+- `src/FeatureExtraction/Services/FeatureExtractorService.cs`
+- `src/FeatureExtraction/SignalAggregator/*.cs`
+- `src/FeatureExtraction/Storage/FeatureStore.cs`
+- `src/FeatureExtraction/Contracts/FeatureRow.cs`
 
-### Data Flow
+---
 
-```
-┌─────────────────┐
-│   Collectors    │ (Session, App, Network, SystemResource)
-└─────────────────┘
-         │ writes to
-         ▼
-┌─────────────────────────────┐
-│    ISignalBroadcaster        │
-│  (Broadcasts to 2 channels)  │
-└─────────────────────────────┘
-          │                   │
-          ▼                   ▼
-   ┌─────────────┐     ┌─────────────┐
-   │  Channel #1 │     │  Channel #2 │
-   │  (Writer)   │     │  (Extractor)│
-   └─────────────┘     └─────────────┘
-          │                   │
-          ▼                   ▼
-┌─────────────────┐   ┌───────────────────┐
-│SignalWriterSvc  │   │ FeatureExtractorSvc│
-│                 │   │                     │
-│→ spool/         │   │→ Event-Time Windows│
-│  raw_signals.jsonl │ │→ Feature Aggregation│
-└─────────────────┘   │→ SQLite Storage    │
-                      └───────────────────┘
-                                 │
-                                 ▼
-                          ┌─────────────────┐
-                          │  FeatureStore    │
-                          │  (SQLite DB)     │
-                          │→ spool/          │
-                          │  features.db     │
-                          └─────────────────┘
-                                 │
-                                 ▼
-                    ┌────────────────────────┐
-                    │  FeatureUploadService   │
-                    │  (Auto-upload)          │
-                    └────────────────────────┘
-                                 │
-                                 ▼
-                    ┌────────────────────────┐
-                    │ FeatureCleanupService   │
-                    │ (7-day retention)       │
-                    └────────────────────────┘
+## Pipeline placement
+
+```text
+ISignalBroadcaster
+  └──► feature channel (BroadcastSignal)
+          └──► FeatureExtractorService
+                  └──► FeatureStore (SQLite: spool/features.db)
+                          ├──► FeatureUploadService (backend /features)
+                          └──► FeatureCleanupService (retention cleanup)
 ```
 
-## Components
+Live extraction consumes the **feature broadcast channel** (separate from the writer channel used by `SignalWriterService`).
 
-### 1. **FeatureExtractorService** (`src/FeatureExtraction/Services/FeatureExtractorService.cs`)
+---
 
-A `BackgroundService` that:
-- Reads signals from a dedicated broadcast channel (separate from SignalWriterService)
-- Uses fixed live windows (60s/30s) for compatibility
-- Supports offline replay window profiles from file:
-  - `W60_S30` (baseline)
-  - `W120_S60` (secondary)
-  - `W30_S15` (sensitivity)
-- Aggregates features using specialized aggregators (Session, App, Network, Cross, SystemResource)
-- Stores feature rows to SQLite database via FeatureStore
-- Supports both live extraction and on-demand extraction from files
+## Windowing semantics
 
-**Key Configuration:**
-- `Enabled`: Toggle to enable/disable the entire feature extraction system (default: true)
-- `EnableLiveExtraction`: Toggle live extraction from broadcast channel (default: true)
-- `WindowSizeSeconds`: Duration of the time window (fixed at 60s in current implementation)
-- `WindowSlideSeconds`: How often to extract features (fixed at 30s in current implementation)
-- `MaxEventsPerWindow`: Buffer size limit (default: 1000 events)
+The feature schema currently uses fixed constants:
 
-### 2. **FeatureStore** (`src/FeatureExtraction/Storage/FeatureStore.cs`)
+- `FeatureSchema.WindowSec = 60`
+- `FeatureSchema.StepSec = 30`
 
-Provides **SQLite-based persistent storage** for feature rows:
-- **`StoreAsync()`**: Insert feature rows into SQLite database (returns auto-generated ID)
-- **`GetUnsentAsync()`**: Query unsent features (sent_flag = 0) for upload
-- **`MarkAsSentAsync()`**: Mark features as uploaded (sent_flag = 1, sent_at = now)
-- **`GetByIdsAsync()`**: Get specific feature rows by ID
-- **`GetRangeAsync()`**: Query features by time range
-- **`GetLatestAsync()`**: Retrieve the most recent N feature rows
-- **`DeleteOlderThanAsync()`**: Delete old sent features (for cleanup)
-- **`GetAllAsync()`**: Get all feature rows (sent and unsent)
+Even though options include `WindowSizeSeconds`/`WindowSlideSeconds`, live extraction enforces schema constants and logs warning on mismatch.
 
-### 3. **FeatureRow** (`src/FeatureExtraction/Contracts/FeatureRow.cs`)
+### Event-time behavior
 
-Data structure representing a feature row (SQLite-based):
-```csharp
-public sealed record FeatureRow(
-    long Id,                        // Database primary key (auto-generated)
-    string DeviceId,                // Device identifier
-    int WindowSec,                  // Window size in seconds (60)
-    DateTimeOffset WindowStartTs,   // Window start timestamp
-    string FeatureVersion,          // Schema version ("1.0")
-    Dictionary<string, object> Features,  // Feature dictionary
-    bool SentFlag,                  // Upload tracking (0 = unsent, 1 = sent)
-    DateTimeOffset? SentAt          // Upload timestamp
-);
-```
+- Events are buffered and sorted by `BroadcastSignal.TimestampUtc`.
+- Emission eligibility is based on max observed event timestamp (event-time watermark style), not wall clock.
+- Each target window includes additional context (`window + step`) before window start to reconstruct stateful ratios.
 
-**Note:** The `WindowEnd` can be calculated as `WindowStartTs + TimeSpan.FromSeconds(WindowSec)`.
+### Buffer compaction
 
-### 4. **FeatureExtractorOptions** (`src/FeatureExtraction/Configuration/FeatureExtractorOptions.cs`)
+Old events are compacted, preserving most recent pre-cutoff state events for session/network continuity.
 
-Configuration options loaded from `appsettings.json`:
-```json
-"FeatureExtractor": {
-  "Enabled": true,
-  "EnableLiveExtraction": true,
-  "WindowSizeSeconds": 60,
-  "WindowSlideSeconds": 30,
-  "MaxEventsPerWindow": 1000
-}
-```
+---
 
-### 5. **FeatureUploadService** (`src/FeatureExtraction/Services/FeatureUploadService.cs`)
+## Aggregator stack
 
-A `BackgroundService` that automatically uploads unsent features to the backend:
-- Runs every **2 minutes**
-- Uploads up to **50 unsent rows** per batch
-- Marks uploaded features as sent in the database
-- Uses exponential backoff retry (5s → 60s max) on failures
-- Endpoint: `POST {BaseUrl}/features` (configurable via `BackendOptions.FeaturesPath`)
+Per-window features are generated by:
 
-### 6. **FeatureCleanupService** (`src/FeatureExtraction/Services/FeatureCleanupService.cs`)
+- `AppFeatureAggregator`
+- `SessionFeatureAggregator`
+- `NetworkFeatureAggregator`
+- `SystemResourceFeatureAggregator`
+- `CrossFeatureAggregator`
 
-A `BackgroundService` that automatically deletes old sent features:
-- Runs **daily**
-- Deletes sent features older than **7 days**
-- Prevents database bloat while retaining recent data
+Schema/version source:
 
-### 7. **KeyboardCommandService** (`src/FeatureExtraction/Services/KeyboardCommandService.cs`)
+- `src/FeatureExtraction/SignalAggregator/FeatureSchema.cs`
+  - `FeatureVersion = "1.2"`
+  - Canonical column lists (`AppColumns`, `SessionColumns`, `NetworkColumns`, `CrossColumns`, `SystemColumns`)
 
-A `BackgroundService` that monitors keyboard commands for administrative tasks:
-- **Ctrl+E**: Extract features from canonical raw data in `spool/raw_signals.jsonl` using default window profiles (`W60_S30`, `W120_S60`, `W30_S15`)
-- **Ctrl+P**: Export unsent features to CSV
-- **Ctrl+O**: Export all features to CSV
-- **Ctrl+Shift+X**: Clear all feature data from database
+For precise signal-to-feature mapping, see `docs/AGGREGATOR_SIGNAL_INVENTORY.md`.
 
-## Extracted Features
+---
 
-The current base implementation extracts the following features per time window:
+## Storage model (`FeatureStore`)
 
-### Count-Based Features
-- `event_count`: Total number of events in the window
-- `unique_event_types`: Number of distinct event types
-- `count_{EventType}`: Count for each specific event type
+Backed by SQLite database at:
 
-### Time-Based Features
-- `avg_interval_seconds`: Average time between consecutive events
-- `max_interval_seconds`: Maximum time gap between events
-- `min_interval_seconds`: Minimum time gap between events
+- `spool/features.db`
 
-### Session State Features
-- `session_lock_count`: Number of session lock events
-- `session_unlock_count`: Number of session unlock events
+Key operations:
 
-### Application Usage Features
-- `app_switch_count`: Number of foreground app changes
-- `unique_apps`: Number of distinct applications used
+- `StoreAsync` - insert rows
+- `GetUnsentAsync` - query pending uploads
+- `MarkAsSentAsync` - mark successfully uploaded rows
+- `GetRangeAsync`, `GetLatestAsync`, `GetAllAsync` - query helpers
+- `DeleteOlderThanAsync` - retention cleanup
 
-### Network Context Features
-- `network_change_count`: Number of network connectivity changes
+`FeatureRow` contains:
 
-### Display State Features
-- `display_on_count`: Number of display-on events
-- `display_off_count`: Number of display-off events
+- `Id`
+- `DeviceId`
+- `WindowSec`
+- `WindowStartTs`
+- `FeatureVersion`
+- run/profile metadata and source counts
+- `Features` (dictionary payload)
+- `SentFlag` / `SentAt`
 
-### System Resource Features
-- CPU: `cpu_usage_mean`, `cpu_usage_max`, `cpu_usage_std`, `cpu_usage_high_ratio`, `cpu_spike_count`
-- RAM: `ram_usage_mean`, `ram_usage_max`, `ram_usage_std`, `ram_high_usage_ratio`, `ram_pressure_events`
-- GPU: `gpu_available`, `gpu_usage_mean`, `gpu_usage_max`, `gpu_usage_std`, `gpu_memory_usage_mean`, `gpu_high_usage_ratio`
-- Network throughput: `net_bytes_sent_mean`, `net_bytes_recv_mean`, `net_bytes_total_mean`, `net_bytes_total_max`, `net_activity_ratio`, `net_throughput_std`, `net_spike_count`
-- Cross-resource: `system_load_index`, `resource_variability_index`, `cpu_ram_correlation_proxy`, `active_resource_ratio`, `has_system_data`
+---
 
-## Key Changes to Existing Architecture
+## Auxiliary services
 
-### Signal Channel Configuration
-**Before:**
-```csharp
-// Single channel with SingleReader = true
-var signalChannel = Channel.CreateBounded<BroadcastSignal>(...);
-```
+### `FeatureUploadService`
 
-**After:**
-```csharp
-// Two separate channels with broadcast pattern
-var signalWriterChannel = Channel.CreateBounded<BroadcastSignal>(...);
-var featureExtractorChannel = Channel.CreateBounded<BroadcastSignal>(...);
+- Periodically uploads unsent rows to backend `FeaturesPath`.
+- Marks successful uploads as sent.
+- Uses retry/backoff on transient failures.
 
-// SignalBroadcaster writes to both channels
-builder.Services.AddSingleton<ISignalBroadcaster>(sp =>
-{
-    var writers = new[] { signalWriterChannel.Writer, featureExtractorChannel.Writer };
-    return new SignalBroadcaster(logger, writers);
-});
-```
+### `FeatureCleanupService`
 
-This change is in `Program.cs` and implements a **broadcast pattern** where collectors write once to the broadcaster, which then writes to multiple independent channels. Each channel has `SingleReader = true` for its dedicated consumer.
+- Periodically removes older sent rows (retention policy).
 
-## Extension Points
+### `KeyboardCommandService`
 
-### Custom Feature Extraction
+Admin hotkeys:
 
-To add domain-specific features, modify the `ExtractFeatures()` method in `FeatureExtractorService.cs`:
+- `Ctrl+E`: extract from `spool/raw_signals.jsonl`
+- `Ctrl+P`: export unsent features to CSV
+- `Ctrl+O`: export all features to CSV
+- `Ctrl+Shift+X`: clear feature DB
 
-```csharp
-private Dictionary<string, object> ExtractFeatures(
-    List<(DateTimeOffset Timestamp, SignalEventType Type, 
-          Dictionary<string, string> Payload)> events)
-{
-    var features = new Dictionary<string, object>();
-    
-    // Add your custom feature extraction logic here
-    // Examples:
-    // - Behavioral patterns (typing speed, mouse patterns)
-    // - Context switches (rapid app switching)
-    // - Anomaly detection (unusual activity times)
-    // - Temporal patterns (time of day, day of week)
-    
-    return features;
-}
-```
+---
 
-### Custom Storage Backend
+## Configuration (`FeatureExtractor`)
 
-The current implementation uses SQLite. To use a different storage backend (e.g., PostgreSQL, cloud storage), implement `IFeatureStore`:
+From `appsettings*.json` via `FeatureExtractorOptions`:
 
-```csharp
-public class PostgresFeatureStore : IFeatureStore
-{
-    public async Task<long> StoreAsync(FeatureRow featureRow, CancellationToken ct)
-    {
-        // Store to PostgreSQL and return ID
-        return insertedId;
-    }
+- `Enabled`
+- `EnableLiveExtraction`
+- `WindowSizeSeconds`
+- `WindowSlideSeconds`
+- `MaxEventsPerWindow`
 
-    // ... implement other interface methods
-}
-```
+If `Enabled=false`, extractor service exits early.
+If `EnableLiveExtraction=false`, on-demand extraction paths still remain available.
 
-Then update `Program.cs`:
-```csharp
-builder.Services.AddSingleton<IFeatureStore, PostgresFeatureStore>();
-```
+---
 
-## Testing
+## Developer notes
 
-The component starts automatically with the service. To verify it's working:
-
-1. **Check Logs:**
-   ```
-   [FeatureExtractorService] Started for device {DeviceId} with fixed event-time windows 60s/30s
-   [FeatureExtractorService] Stored feature row 42 with 15 features for window 2024-01-15T10:00:00Z
-   [FeatureUploadService] Successfully uploaded and marked 10 feature rows as sent
-   [FeatureCleanupService] Deleted 120 old feature rows (cutoff: 2024-01-08T10:00:00Z)
-   ```
-
-2. **Inspect Feature Store (SQLite):**
-   ```bash
-   sqlite3 spool/features.db "SELECT COUNT(*) FROM feature_rows;"
-   sqlite3 spool/features.db "SELECT * FROM feature_rows WHERE sent_flag = 0 LIMIT 5;"
-   ```
-
-3. **Use Keyboard Commands:**
-   - Press **Ctrl+E** to extract features from all signals on-demand
-   - Press **Ctrl+P** to export unsent features to CSV
-   - Press **Ctrl+O** to export all features to CSV
-
-4. **Disable if Needed:**
-   Set in `appsettings.json`:
-   ```json
-   "FeatureExtractor": {
-     "Enabled": false
-   }
-   ```
-   Or to disable only live extraction (keeping on-demand via Ctrl+E):
-   ```json
-   "FeatureExtractor": {
-     "Enabled": true,
-     "EnableLiveExtraction": false
-   }
-   ```
-
-## Performance Considerations
-
-- **Memory:** The service buffers up to `MaxEventsPerWindow` events in memory per window
-- **I/O:** SQLite writes are transactional; feature rows are inserted every 30 seconds (slide interval)
-- **Database Size:** ~500 bytes to 2 KB per row; with 7-day retention at 1 feature/minute ≈ 10 MB
-- **CPU:** Feature extraction is CPU-bound; uses specialized aggregators for efficiency
-- **Channel Backpressure:** Each broadcast channel uses `FullMode.Wait`, so if any consumer is slow, collectors will block
-- **Upload Frequency:** Features are uploaded every 2 minutes (up to 50 rows per batch)
-- **Cleanup Frequency:** Old features are deleted daily
-
-## Future Enhancements
-
-1. **Real-time ML Inference:** Feed extracted features to an ML model for anomaly detection
-2. **Feature Store API:** Expose REST endpoints to query features
-3. **Advanced Features:** Sequential patterns, context embeddings, behavioral biometrics
-4. **Distributed Processing:** Scale feature extraction across multiple workers
-5. **Configurable Retention:** Make the 7-day retention period configurable
-6. **Feature Versioning:** Support multiple feature schema versions simultaneously
-7. **Cloud Storage:** Alternative backends for cloud-based feature storage
-
-## Files Created
-
-### Core Feature Extraction
-- `src/FeatureExtraction/Contracts/FeatureRow.cs` - Feature row data model (SQLite-based)
-- `src/FeatureExtraction/Contracts/FeatureBatchContracts.cs` - Upload DTOs
-- `src/FeatureExtraction/Storage/FeatureStore.cs` - SQLite-based feature storage
-- `src/FeatureExtraction/Configuration/FeatureExtractorOptions.cs` - Configuration options
-- `src/FeatureExtraction/Services/FeatureExtractorService.cs` - Main extraction service
-- `src/FeatureExtraction/Services/FeatureUploadService.cs` - Automatic upload service
-- `src/FeatureExtraction/Services/FeatureCleanupService.cs` - Automatic cleanup service
-- `src/FeatureExtraction/Services/KeyboardCommandService.cs` - Admin commands
-
-### Feature Aggregators
-- `src/FeatureExtraction/SignalAggregator/AppFeatureAggregator.cs` - Application usage features
-- `src/FeatureExtraction/SignalAggregator/SessionFeatureAggregator.cs` - Session state features
-- `src/FeatureExtraction/SignalAggregator/NetworkFeatureAggregator.cs` - Network context features
-- `src/FeatureExtraction/SignalAggregator/CrossFeatureAggregator.cs` - Cross-domain features
-
-### Broadcasting Infrastructure
-- `src/SignalCollection/Broadcasting/ISignalBroadcaster.cs` - Broadcaster interface
-- `src/SignalCollection/Broadcasting/SignalBroadcaster.cs` - Broadcast implementation
-- `src/SignalCollection/Broadcasting/BroadcastSignal.cs` - Signal record type
-- `src/SignalCollection/Broadcasting/ISignalWriterChannelReader.cs` - Writer channel reader
-- `src/FeatureExtraction/Broadcasting/IFeatureExtractorChannelReader.cs` - Extractor channel reader
-
-## Files Modified
-
-- `src/Program.cs` - Added broadcast pattern with two separate channels, registered all feature services
-- `src/Bootstrap/Configuration/BackendOptions.cs` - Added `FeaturesPath` property
-- `appsettings.json` - Added FeatureExtractor configuration section and FeaturesPath
-- `EndpointSignalAgent.csproj` - Added `Microsoft.Data.Sqlite` package reference
-- All collectors - Updated to use `ISignalBroadcaster` instead of direct channel writes
-
-## Database Schema
-
-The SQLite database (`spool/features.db`) uses the following schema:
-
-```sql
-CREATE TABLE feature_rows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id TEXT NOT NULL,
-    window_sec INTEGER NOT NULL,
-    window_start_ts TEXT NOT NULL,
-    feature_version TEXT NOT NULL,
-    features_json TEXT NOT NULL,
-    sent_flag INTEGER NOT NULL DEFAULT 0,
-    sent_at TEXT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX idx_sent_flag ON feature_rows(sent_flag);
-CREATE INDEX idx_window_start ON feature_rows(window_start_ts);
-CREATE INDEX idx_device_id ON feature_rows(device_id);
-```
-
-## Related Documentation
-
-- **[SQLite-Migration.md](SQLite-Migration.md)** - Detailed documentation of the SQLite migration
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Overall system architecture including broadcast pattern
+- Canonical raw replay input is `spool/raw_signals.jsonl`.
+- Live extraction run IDs are generated per service instance.
+- Feature schema changes should be coordinated with:
+  1. `FeatureSchema`
+  2. individual aggregators
+  3. downstream upload/backend consumers.
