@@ -125,23 +125,29 @@ public sealed class WindowedFeatureExtractionTests
 
         var events = new List<FeatureSignal>
         {
-            E("2026-03-05T00:00:05Z", SignalEventType.SystemResourceSample, new()
+            E("2026-03-05T00:00:05Z", SignalEventType.SystemResourceTick, new()
             {
-                ["cpu_mean_pct"] = "20",
-                ["mem_mean_used_pct"] = "40",
-                ["gpu_mean_pct"] = "5",
+                ["cpu_available"] = "true",
+                ["cpu_pct"] = "20",
+                ["mem_available"] = "true",
+                ["mem_used_pct"] = "40",
+                ["gpu_available"] = "true",
+                ["gpu_pct"] = "5",
                 ["gpu_mem_used_pct"] = "10",
-                ["net_tx_mean_kbps"] = "200",
-                ["net_rx_mean_kbps"] = "800"
+                ["net_tx_kbps"] = "200",
+                ["net_rx_kbps"] = "800"
             }),
-            E("2026-03-05T00:00:35Z", SignalEventType.SystemResourceSample, new()
+            E("2026-03-05T00:00:35Z", SignalEventType.SystemResourceTick, new()
             {
-                ["cpu_mean_pct"] = "60",
-                ["mem_mean_used_pct"] = "70",
-                ["gpu_mean_pct"] = "15",
+                ["cpu_available"] = "true",
+                ["cpu_pct"] = "60",
+                ["mem_available"] = "true",
+                ["mem_used_pct"] = "70",
+                ["gpu_available"] = "true",
+                ["gpu_pct"] = "15",
                 ["gpu_mem_used_pct"] = "30",
-                ["net_tx_mean_kbps"] = "400",
-                ["net_rx_mean_kbps"] = "600"
+                ["net_tx_kbps"] = "400",
+                ["net_rx_kbps"] = "600"
             })
         };
 

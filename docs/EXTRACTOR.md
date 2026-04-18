@@ -30,12 +30,13 @@ Live extraction consumes the **feature broadcast channel** (separate from the wr
 
 ## Windowing semantics
 
-The feature schema currently uses fixed constants:
+Windowing is profile-aware for offline replay via `WindowProfile`:
 
-- `FeatureSchema.WindowSec = 60`
-- `FeatureSchema.StepSec = 30`
+- `W60_S30`
+- `W120_S60`
+- `W30_S15`
 
-Even though options include `WindowSizeSeconds`/`WindowSlideSeconds`, live extraction enforces schema constants and logs warning on mismatch.
+Live extraction still emits canonical schema windows while on-demand extraction from `raw_signals.jsonl` can materialize all supported profiles from event time.
 
 ### Event-time behavior
 

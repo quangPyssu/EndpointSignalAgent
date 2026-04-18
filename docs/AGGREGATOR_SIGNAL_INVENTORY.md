@@ -14,7 +14,7 @@ Signals used by aggregators:
 - Application usage: `ForegroundAppChanged`, `AppDwell`, `AppSwitchRate`
 - Session state: `SessionLock`, `SessionUnlock`, `IdleSample`, `ScreenSaverOn`, `ScreenSaverOff`, `DisplayOn`, `DisplayOff`, `DisplayDimmed`
 - Network context: `VpnStateChanged`, `WifiLinkChanged`, `WifiSsidChanged`, `LocalNetworkChanged`, `PublicIpBucketChanged`
-- System resources: `SystemResourceSample`
+- System resources: `SystemResourceTick`
 
 Signals defined but not used by current aggregators:
 - `Heartbeat`
@@ -27,8 +27,8 @@ This section explains how the extractor turns raw event timestamps into fixed fe
 
 ### Canonical Window Shape
 
-- Window size is fixed at 60 seconds (`FeatureSchema.WindowSec = 60`).
-- Step/slide is fixed at 30 seconds (`FeatureSchema.StepSec = 30`).
+- Windowing is profile-aware (`W60_S30`, `W120_S60`, `W30_S15`).
+- Windows are computed in event time per selected profile.
 - Windows are half-open intervals: `[start, end)`.
 - Adjacent windows overlap by 30 seconds.
 
@@ -430,59 +430,30 @@ Features affected:
 
 ## SystemResourceCollector Signals
 
-### SystemResourceSample
+### SystemResourceTick
 Emitted payload keys:
-- `window_sec`
 - `cpu_available`
+- `cpu_pct`
 - `mem_available`
+- `mem_used_pct`
+- `mem_avail_mb`
+- `mem_total_mb`
 - `gpu_available`
-- `swap_available`
-- `cpu_mean_pct`
-- `cpu_std_pct`
-- `cpu_max_pct`
-- `cpu_high_ratio`
-- `cpu_idle_ratio`
-- `cpu_spike_count`
-- `cpu_bucket_flip_count`
-- `mem_mean_used_pct`
-- `mem_std_used_pct`
-- `mem_pressure_ratio`
-- `mem_available_bucket`
-- `mem_swap_activity`
-- `mem_range_pct`
-- `gpu_mean_pct`
-- `gpu_active_ratio`
-- `gpu_spike_count`
+- `gpu_pct`
 - `gpu_mem_used_pct`
 - `gpu_engine_active_count`
-- `gpu_bucket_flip_count`
-- `net_rx_mean_kbps`
-- `net_rx_std_kbps`
-- `net_tx_mean_kbps`
-- `net_tx_std_kbps`
-- `net_upload_ratio`
+- `swap_available`
+- `net_rx_kbps`
+- `net_tx_kbps`
 
 Consumed by:
 - `SystemResourceFeatureAggregator`
 
 Payload keys read by aggregators:
-- `cpu_mean_pct`
-- `cpu_std_pct` (optional)
-- `cpu_max_pct` (optional)
-- `cpu_high_ratio` (optional)
-- `cpu_spike_count` (optional)
-- `mem_mean_used_pct`
-- `mem_std_used_pct` (optional)
-- `mem_pressure_ratio` (optional)
-- `gpu_mean_pct`
-- `gpu_mem_used_pct`
-- `net_tx_mean_kbps`
-- `net_rx_mean_kbps`
-- `net_rx_std_kbps` (optional)
-- `net_tx_std_kbps` (optional)
-- `cpu_available`
-- `mem_available`
-- `gpu_available`
+- `cpu_available`, `cpu_pct`
+- `mem_available`, `mem_used_pct`
+- `gpu_available`, `gpu_pct`, `gpu_mem_used_pct`
+- `net_tx_kbps`, `net_rx_kbps`
 
 Features affected:
 - `cpu_usage_mean`
@@ -521,8 +492,10 @@ Features affected:
 - `active_resource_ratio`
 - `has_system_data`
 
-## Notes
+Removed collector-side summary keys (not consumed anymore):
+- `window_sec`
+- `cpu_mean_pct`, `cpu_std_pct`, `cpu_max_pct`, `cpu_high_ratio`, `cpu_idle_ratio`, `cpu_spike_count`, `cpu_bucket_flip_count`
+- `mem_mean_used_pct`, `mem_std_used_pct`, `mem_pressure_ratio`, `mem_available_bucket`, `mem_swap_activity`, `mem_range_pct`
+- `gpu_mean_pct`, `gpu_active_ratio`, `gpu_spike_count`, `gpu_bucket_flip_count`
+- `net_rx_mean_kbps`, `net_rx_std_kbps`, `net_tx_mean_kbps`, `net_tx_std_kbps`, `net_upload_ratio`
 
-- Cross features (`active_work_ratio`, `app_switches_per_active_min`, `category_entropy_active`) are derived from already aggregated app/session outputs and do not require additional raw signal types.
-- Aggregator logic is type-driven first, then payload-key-driven for specific calculations.
-- If a payload key is missing, most aggregators default to safe values (`0`, `false`, or fallback paths), but accuracy will degrade.

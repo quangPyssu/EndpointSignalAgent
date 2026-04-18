@@ -64,13 +64,6 @@ public sealed class SignalWriterService : BackgroundService
     {
         _cachedDeviceId ??= TryGetDeviceId();
         var provenance = SignalProvenanceCatalog.Resolve(signal.Type);
-        var nativeAggregationSec = provenance.Kind == SignalKind.PreAggregated &&
-                                   signal.Type == SignalEventType.SystemResourceSample &&
-                                   signal.Payload.TryGetValue("window_sec", out var windowSecText) &&
-                                   int.TryParse(windowSecText, out var windowSec)
-            ? windowSec
-            : provenance.NativeAggregationSec;
-
         return new RawCollectorSignalRecord(
             SchemaVersion: SignalProvenanceCatalog.RawSchemaVersion,
             TimestampUtc: signal.TimestampUtc,
@@ -81,7 +74,7 @@ public sealed class SignalWriterService : BackgroundService
             SignalType: signal.Type.ToString(),
             SignalKind: ToSnakeCase(provenance.Kind),
             NativeCadenceSec: provenance.NativeCadenceSec,
-            NativeAggregationSec: nativeAggregationSec,
+            NativeAggregationSec: provenance.NativeAggregationSec,
             CollectorSchemaVersion: provenance.CollectorSchemaVersion,
             Payload: new Dictionary<string, string>(signal.Payload, StringComparer.Ordinal));
     }

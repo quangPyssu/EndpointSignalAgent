@@ -181,47 +181,21 @@ Raw export provenance:
 
 ### Signals emitted
 
-- `SystemResourceSample` (windowed CPU/RAM/GPU/network throughput metrics)
+- `SystemResourceTick` (raw 2-second CPU/RAM/GPU/network state sample)
 
 ### Architecture
 
-- Polling collector (`2s`) with in-memory rolling window (`60s`)
-- Emits every `15s` using current window snapshot
-- Best-effort WMI reads (`System.Management`) with graceful degradation to `0` / `unknown` values
+- Polling collector (`2s`) with immediate emit per sample
+- No collector-side rolling summary window
+- Best-effort native sampling with explicit availability flags
 
 ### Payload fields
 
-#### CPU
-- `cpu_mean_pct`
-- `cpu_std_pct`
-- `cpu_max_pct`
-- `cpu_high_ratio`
-- `cpu_idle_ratio`
-- `cpu_spike_count`
-- `cpu_bucket_flip_count`
-
-#### RAM
-- `mem_mean_used_pct`
-- `mem_std_used_pct`
-- `mem_pressure_ratio`
-- `mem_available_bucket`
-- `mem_swap_activity`
-- `mem_range_pct`
-
-#### GPU
-- `gpu_mean_pct`
-- `gpu_active_ratio`
-- `gpu_spike_count`
-- `gpu_mem_used_pct`
-- `gpu_engine_active_count`
-- `gpu_bucket_flip_count`
-
-#### Network throughput
-- `net_rx_mean_kbps`
-- `net_rx_std_kbps`
-- `net_tx_mean_kbps`
-- `net_tx_std_kbps`
-- `net_upload_ratio`
+- `cpu_available`, `cpu_pct`
+- `mem_available`, `mem_used_pct`, `mem_avail_mb`, `mem_total_mb`
+- `gpu_available`, `gpu_pct`, `gpu_mem_used_pct`, `gpu_engine_active_count`
+- `swap_available`
+- `net_rx_kbps`, `net_tx_kbps`
 
 ## Collector 2: `SessionStateCollector`
 

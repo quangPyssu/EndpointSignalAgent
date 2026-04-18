@@ -495,7 +495,7 @@ public sealed class FeatureExtractorService : BackgroundService
             ["application"] = context.Count(s => s.Type is SignalEventType.ForegroundAppChanged or SignalEventType.AppDwell or SignalEventType.AppSwitchRate),
             ["session"] = context.Count(s => s.Type is SignalEventType.SessionLock or SignalEventType.SessionUnlock or SignalEventType.IdleSample or SignalEventType.ScreenSaverOn or SignalEventType.ScreenSaverOff or SignalEventType.DisplayOn or SignalEventType.DisplayOff or SignalEventType.DisplayDimmed),
             ["network"] = context.Count(s => s.Type is SignalEventType.VpnStateChanged or SignalEventType.WifiLinkChanged or SignalEventType.WifiSsidChanged or SignalEventType.LocalNetworkChanged or SignalEventType.PublicIpBucketChanged),
-            ["system"] = context.Count(s => s.Type is SignalEventType.SystemResourceSample)
+            ["system"] = context.Count(s => s.Type is SignalEventType.SystemResourceTick)
         };
     }
 }

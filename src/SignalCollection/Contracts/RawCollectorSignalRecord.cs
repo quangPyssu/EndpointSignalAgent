@@ -59,7 +59,7 @@ public static class SignalProvenanceCatalog
             Shared.Contracts.SignalEventType.LocalNetworkChanged => new("NetworkContextCollector", SignalKind.StateChange, 3, null, "2.0"),
             Shared.Contracts.SignalEventType.PublicIpBucketChanged => new("NetworkContextCollector", SignalKind.StateChange, 60, null, "2.0"),
 
-            Shared.Contracts.SignalEventType.SystemResourceSample => new("SystemResourceCollector", SignalKind.PreAggregated, 5, null, "1.0"),
+            Shared.Contracts.SignalEventType.SystemResourceTick => new("SystemResourceCollector", SignalKind.StateSample, 2, null, "2.0"),
             _ => new("UnknownCollector", SignalKind.Event, null, null, "1.0")
         };
     }
