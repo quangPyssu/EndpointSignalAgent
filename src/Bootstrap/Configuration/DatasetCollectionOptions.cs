@@ -8,7 +8,7 @@ public sealed class DatasetCollectionOptions
     public string ParticipantId { get; set; } = "P001";
     public string StudyId { get; set; } = "thesis-mature-dataset-v1";
     public string ProtocolVersion { get; set; } = "1.0";
-    public bool SessionAutoStart { get; set; }
+    public bool SessionAutoStart { get; set; } = true;
     public bool RequireSessionMetadata { get; set; } = true;
     public bool EnableAbnormalTagging { get; set; } = true;
     public bool EnableProgressTracking { get; set; } = true;

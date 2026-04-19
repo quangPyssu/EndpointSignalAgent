@@ -215,6 +215,7 @@ public static class AgentHostBootstrap
             builder.Services.AddSingleton<IAbnormalTaggingService, AbnormalTaggingService>();
             builder.Services.AddSingleton<IProgressTrackingService, ProgressTrackingService>();
             builder.Services.AddHostedService(sp => (ProgressTrackingService)sp.GetRequiredService<IProgressTrackingService>());
+            builder.Services.AddHostedService<DatasetSessionStartupService>();
             builder.Services.AddSingleton<DatasetExportService>();
         }
     }

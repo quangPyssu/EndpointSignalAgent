@@ -154,7 +154,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
             _logger.LogInformation("Host started");
             UpdatePauseMenuText();
-            UpdateTrayStatusText($"EndpointSignalAgent ({_agentOptions.Mode})");
+            await UpdateDatasetSessionStatusAsync();
         }
         catch (Exception ex)
         {
@@ -173,6 +173,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         var text = new StringBuilder()
             .AppendLine($"Host running: {_hostRunning}")
             .AppendLine($"Mode: {_agentOptions?.Mode ?? "unknown"}")
+            .AppendLine($"Dataset session active: {(_collectionSessionService?.CurrentSession is not null)}")
+            .AppendLine($"Dataset session state: {_collectionSessionService?.CurrentSession?.State ?? "none"}")
             .AppendLine($"Collection paused: {paused}")
             .AppendLine($"Enrollment: {enrollment}")
             .AppendLine($"Backend: {backend}")
@@ -273,10 +275,18 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
+        if (_collectionSessionService.CurrentSession is { State: "Running" or "Paused" } current)
+        {
+            MessageBox.Show($"Session already active:\n{current.SessionId}", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            await UpdateDatasetSessionStatusAsync();
+            return;
+        }
+
         var label = Prompt("Session Label", "Enter session label:", $"session-{DateTime.Now:yyyyMMdd-HHmmss}");
         var notes = Prompt("Session Notes", "Enter short note (optional):", "");
         var session = await _collectionSessionService.StartSessionAsync(label ?? string.Empty, normalOnly: false, notes, "tray", CancellationToken.None);
         await _progressTrackingService!.RecalculateAsync(CancellationToken.None);
+        await UpdateDatasetSessionStatusAsync();
         MessageBox.Show($"Session started:\n{session.SessionId}", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
@@ -304,6 +314,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         await _progressTrackingService!.RecalculateAsync(CancellationToken.None);
+        await UpdateDatasetSessionStatusAsync();
     }
 
     private async Task EndSessionAsync()
@@ -316,6 +327,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var notes = Prompt("End Session", "Optional end-session note:", "");
         var ended = await _collectionSessionService.EndSessionAsync(notes, "tray", CancellationToken.None);
         await _progressTrackingService!.RecalculateAsync(CancellationToken.None);
+        await UpdateDatasetSessionStatusAsync();
 
         MessageBox.Show(ended is null ? "No active session." : $"Session ended: {ended.SessionId}", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
@@ -509,6 +521,21 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         _notifyIcon.Text = text.Length > 63 ? text[..63] : text;
+    }
+
+    private Task UpdateDatasetSessionStatusAsync()
+    {
+        var mode = _agentOptions?.Mode ?? "unknown";
+        if (!AgentModes.IsDatasetCollection(mode))
+        {
+            UpdateTrayStatusText($"EndpointSignalAgent ({mode})");
+            return Task.CompletedTask;
+        }
+
+        var current = _collectionSessionService?.CurrentSession;
+        var sessionState = current is null ? "inactive" : $"{current.State.ToLowerInvariant()}";
+        UpdateTrayStatusText($"EndpointSignalAgent ({mode}, session:{sessionState})");
+        return Task.CompletedTask;
     }
 
     private async Task ExitAsync()

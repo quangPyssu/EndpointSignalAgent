@@ -78,6 +78,50 @@ public sealed class CollectionSessionService : ICollectionSessionService
     public Task<CollectionSessionRecord?> EndSessionAsync(string? notes, string initiatedBy, CancellationToken ct)
         => TransitionAsync("Completed", initiatedBy, notes, ct, setEndedAt: true);
 
+    public async Task<int> CloseStaleSessionsAsync(string? notes, string initiatedBy, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var sessions = await _manifestService.LoadSessionsAsync(ct);
+            var staleSessions = sessions
+                .Where(s => (string.Equals(s.State, "Running", StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(s.State, "Paused", StringComparison.OrdinalIgnoreCase))
+                            && !s.EndedAtUtc.HasValue)
+                .ToList();
+
+            if (staleSessions.Count == 0)
+            {
+                return 0;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            foreach (var stale in staleSessions)
+            {
+                var recovered = stale with
+                {
+                    State = "Completed",
+                    EndedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    Notes = MergeNotes(stale.Notes, MergeNotes(notes, $"state=Completed,by={initiatedBy}"))
+                };
+
+                await _manifestService.SaveSessionAsync(recovered, ct);
+            }
+
+            if (CurrentSession is not null && staleSessions.Any(s => string.Equals(s.SessionId, CurrentSession.SessionId, StringComparison.Ordinal)))
+            {
+                CurrentSession = null;
+            }
+
+            return staleSessions.Count;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public Task<IReadOnlyList<CollectionSessionRecord>> GetSessionsAsync(CancellationToken ct)
         => _manifestService.LoadSessionsAsync(ct);
 
