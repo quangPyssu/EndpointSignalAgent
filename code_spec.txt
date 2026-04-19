@@ -1,0 +1,413 @@
+Implement a new first-class runtime mode called DatasetCollection for the Windows tray agent.
+
+Use the current codebase docs as the source of truth:
+- The app is a WinForms tray app with host wiring in `src/Bootstrap/AgentHostBootstrap.cs`, tray shell in `src/Tray/TrayApplicationContext.cs`, and current service graph including collectors, send pipeline, feature pipeline, and status/decision pipeline. The current runtime already persists `spool/raw_signals.jsonl` as the canonical raw collector export, alongside `spool/signals.jsonl` and `spool/features.db`. The current feature extractor supports on-demand extraction from `spool/raw_signals.jsonl`, and live extraction can be disabled separately. The thesis proposal requires a mature dataset with temporally distributed collection, explicit abnormal-segment tagging, structured collection conditions, and later comparison of multiple window sizes, so raw event-time data must remain the canonical dataset source rather than only live 60s features. :contentReference[oaicite:0]{index=0} :contentReference[oaicite:1]{index=1} :contentReference[oaicite:2]{index=2}
+
+High-level goal:
+- Add DatasetCollection mode optimized for building the new mature dataset.
+- In this mode:
+  - disable backend send,
+  - disable status polling,
+  - disable decision processing,
+  - disable live feature extraction,
+  - keep local raw signal persistence,
+  - keep export and on-demand feature extraction,
+  - add explicit abnormal-segment tagging,
+  - add a progress counter based on days, sessions, active hours, and scenario completion.
+
+Do not implement live inference, backend upload recovery, or response actions in this change.
+
+==================================================
+REQUIRED BEHAVIOR
+==================================================
+
+1) New mode
+Add `Agent:Mode` with allowed values:
+- `Normal`
+- `DatasetCollection`
+
+When `Agent:Mode=DatasetCollection`:
+- force `Backend:UseBackend=false`
+- force `FeatureExtractor:EnableLiveExtraction=false`
+- do not start:
+  - `BatchProducerService`
+  - `BatchSendService`
+  - `StatusPollService`
+  - `DecisionProcessorService`
+  - `FeatureUploadService`
+- keep running:
+  - `SignalWriterService`
+  - `SessionStateCollector`
+  - `ApplicationUsageCollector`
+  - `NetworkContextCollector`
+  - `SystemResourceCollector`
+  - `KeyboardCommandService`
+  - tray UI
+- `FeatureCleanupService` should be disabled by default in DatasetCollection mode to avoid deleting study data
+
+2) Canonical data source
+Use `spool/raw_signals.jsonl` as the canonical dataset source in DatasetCollection mode.
+Keep `spool/signals.jsonl` only if needed for compatibility.
+Do not depend on backend enrollment or backend availability to start collection. Current docs show raw signal export and on-demand replay already exist. :contentReference[oaicite:3]{index=3} :contentReference[oaicite:4]{index=4}
+
+3) Session management
+Add explicit collection sessions with states:
+- Idle
+- Prepared
+- Running
+- Paused
+- Completed
+- Exported
+
+Each session must have:
+- `session_id`
+- `participant_id`
+- `study_id`
+- `protocol_version`
+- `device_id`
+- `agent_version`
+- `mode`
+- `started_at_utc`
+- `ended_at_utc`
+- `session_label`
+- `normal_only`
+- `notes`
+
+4) Explicit abnormal-segment tagging
+Add abnormal segment annotations during collection.
+Each annotation must have:
+- `annotation_id`
+- `session_id`
+- `segment_type` = `abnormal`
+- `scenario_code`
+- `scenario_label`
+- `started_at_utc`
+- `ended_at_utc`
+- `initiated_by`
+- `confidence`
+- `notes`
+- `is_complete`
+
+Suggested scenario codes:
+- `DIFFERENT_USER`
+- `UNUSUAL_APP_SEQUENCE`
+- `UNUSUAL_TIME_CONTEXT`
+- `NETWORK_CONTEXT_SHIFT`
+- `LOW_ACTIVITY_HIDE`
+- `REMOTE_ACCESS_CONTEXT`
+- `SCRIPTED_SIMULATION_OTHER`
+
+Add tray actions to:
+- start session
+- end session
+- pause/resume session
+- start abnormal segment
+- end abnormal segment
+- mark last 5 minutes abnormal
+- enter short note
+- show progress
+
+5) Progress tracking
+Add participant progress tracking with:
+- study span in weeks
+- valid collection days
+- total sessions completed
+- total runtime hours
+- total active hours
+- abnormal scenarios completed
+- abnormal minutes
+- core-signal coverage days ok
+- completion status
+- completion ratio
+- last updated timestamp
+
+Use completion based on multiple thresholds, not hours alone:
+- weeks elapsed >= configured target
+- valid collection days >= configured target
+- sessions completed >= configured target
+- active hours >= configured target
+- abnormal scenarios completed >= configured target
+- abnormal minutes >= configured target
+
+Use this operational definition for active hours:
+- `active_hours = sum(duration where active_work_ratio > 0 OR has_app_data = 1)` when derived features are available
+- if live features are disabled, compute a lightweight progress estimate from raw/session/app state using signals such as unlocked session, display on, app dwell present, and not-away/low-idle state
+This is only for progress tracking, not canonical final analytics.
+
+6) Export
+Add dataset package export. A package must include:
+- raw signals for selected session/day/participant
+- session manifests
+- abnormal annotations
+- progress snapshot
+- collector health snapshot
+- export metadata:
+  - export time
+  - agent version
+  - schema version
+  - checksum list
+
+Keep on-demand feature extraction from raw signals available through the existing extractor path.
+Allow export of derived features later for selectable window specs, such as:
+- `60s/30s`
+- `120s/30s`
+- `300s/60s`
+
+==================================================
+CONFIG TO ADD
+==================================================
+
+Add new config section:
+
+```json
+"DatasetCollection": {
+  "Enabled": true,
+  "ParticipantId": "P001",
+  "StudyId": "thesis-mature-dataset-v1",
+  "ProtocolVersion": "1.0",
+  "SessionAutoStart": false,
+  "RequireSessionMetadata": true,
+  "EnableAbnormalTagging": true,
+  "EnableProgressTracking": true,
+  "DailyActiveHourTarget": 4.0,
+  "WeeklyActiveDayTarget": 5,
+  "StudyWeekTarget": 4,
+  "MinSessionMinutes": 20,
+  "ExpectedSessionCount": 16,
+  "ExpectedAbnormalScenarioCount": 6,
+  "ExpectedAbnormalMinutesMin": 60,
+  "ExportRoot": "exports",
+  "ManifestRoot": "spool/manifests"
+}
+````
+
+Also add:
+
+* `Agent:Mode`
+* validation for `Agent:Mode`
+* binding/options class for `DatasetCollectionOptions`
+
+==================================================
+FILES TO MODIFY
+===============
+
+Modify:
+
+* `src/Bootstrap/AgentHostBootstrap.cs`
+* `src/Tray/TrayApplicationContext.cs`
+* `appsettings.json`
+* any options validation area currently used for Agent/Backend/FeatureExtractor options
+* any collection-control interfaces if needed for pause/resume/session lifecycle
+* any feature export path needed to support manual export from raw signals
+
+If the current startup wiring still has logic in `Program.cs` that needs mode awareness, update it minimally, but keep host wiring centralized in `AgentHostBootstrap` because the current docs identify that as the service-registration source. 
+
+==================================================
+NEW FILES / NEW TYPES TO ADD
+============================
+
+Add these new types:
+
+Options / models:
+
+* `src/Bootstrap/Configuration/DatasetCollectionOptions.cs`
+* `src/DatasetCollection/Contracts/CollectionSessionRecord.cs`
+* `src/DatasetCollection/Contracts/AbnormalAnnotationRecord.cs`
+* `src/DatasetCollection/Contracts/ProgressStateRecord.cs`
+* `src/DatasetCollection/Contracts/CollectorHealthSnapshot.cs`
+* `src/DatasetCollection/Contracts/DatasetExportManifest.cs`
+
+Services:
+
+* `src/DatasetCollection/Services/CollectionSessionService.cs`
+* `src/DatasetCollection/Services/AbnormalTaggingService.cs`
+* `src/DatasetCollection/Services/ProgressTrackingService.cs`
+* `src/DatasetCollection/Services/CollectionManifestService.cs`
+* optionally `src/DatasetCollection/Services/DatasetExportService.cs`
+
+Storage:
+
+* `src/DatasetCollection/Storage/SessionManifestStore.cs`
+* `src/DatasetCollection/Storage/AnnotationStore.cs`
+* `src/DatasetCollection/Storage/ProgressStateStore.cs`
+
+Interfaces:
+
+* `src/DatasetCollection/Abstractions/ICollectionSessionService.cs`
+* `src/DatasetCollection/Abstractions/IAbnormalTaggingService.cs`
+* `src/DatasetCollection/Abstractions/IProgressTrackingService.cs`
+* `src/DatasetCollection/Abstractions/ICollectionManifestService.cs`
+
+Use JSON-file-backed stores first, not SQLite, unless there is already a stronger local metadata persistence pattern you can reuse.
+
+==================================================
+IMPLEMENTATION DETAILS
+======================
+
+A) Mode-aware service registration
+In `AgentHostBootstrap`:
+
+* bind `AgentOptions`, `BackendOptions`, `FeatureExtractorOptions`, `DatasetCollectionOptions`
+* validate `Agent:Mode`
+* branch service registration by mode
+* in DatasetCollection mode:
+
+  * skip send/status/decision/feature-upload services
+  * skip or disable feature cleanup
+  * keep collectors, signal writer, tray UI, keyboard command service
+  * register the new dataset collection services
+* enforce overrides at runtime:
+
+  * `Backend.UseBackend = false`
+  * `FeatureExtractor.EnableLiveExtraction = false`
+
+B) Backend and enrollment behavior
+In DatasetCollection mode:
+
+* do not require backend enrollment before collection starts
+* use a local stable device ID path only
+* do not retry network enrollment
+  If existing enrollment store is deeply coupled, add a clean local/offline identity branch rather than ripping out the old path.
+
+C) Session manifests
+Create manifest files under:
+
+* `spool/manifests/study_manifest.json`
+* `spool/manifests/participant_manifest.json`
+* `spool/manifests/session_<sessionId>.json`
+* `spool/manifests/session_<sessionId>.annotations.json`
+* `spool/manifests/progress_state.json`
+
+Make writes atomic:
+
+* write temp file
+* replace existing
+
+D) Progress updates
+Update progress:
+
+* on session start/end
+* on pause/resume
+* on abnormal segment start/end
+* periodically during a running session, e.g. every 60s
+  Persist last known progress state to disk.
+
+E) Tray UI
+In `TrayApplicationContext` add menu actions/dialogs for:
+
+* Start collection session
+* Pause/resume collection session
+* End collection session
+* Start abnormal segment
+* End abnormal segment
+* Mark last 5 min abnormal
+* Show progress
+* Export dataset package
+* Open manifest folder
+
+Keep the UI simple; use modal dialogs or compact forms if there is no existing richer UI framework in the tray app.
+
+F) Export package
+Add export service that creates:
+
+* per-session package
+* per-day package
+* participant cumulative package
+
+Package should include:
+
+* raw JSONL slice or raw file copy
+* manifests
+* annotations
+* progress snapshot
+* checksum manifest
+
+G) On-demand feature export
+Keep manual export from raw signals working. If needed, add a window-spec parameter to the existing manual export flow so derived features can be generated later from raw signals for different window settings. Current docs already say the extractor supports on-demand extraction from raw input and that live extraction can be disabled separately. 
+
+==================================================
+DEFAULTS
+========
+
+Use these defaults:
+
+* `Agent:Mode = DatasetCollection`
+* `Backend:UseBackend = false`
+* `FeatureExtractor:EnableLiveExtraction = false`
+* `DatasetCollection:RequireSessionMetadata = true`
+* `DatasetCollection:EnableAbnormalTagging = true`
+* `DatasetCollection:EnableProgressTracking = true`
+* `DatasetCollection:StudyWeekTarget = 4`
+* `DatasetCollection:WeeklyActiveDayTarget = 5`
+* `DatasetCollection:DailyActiveHourTarget = 4.0`
+* `DatasetCollection:ExpectedSessionCount = 16`
+* `DatasetCollection:ExpectedAbnormalScenarioCount = 6`
+* `DatasetCollection:ExpectedAbnormalMinutesMin = 60`
+
+==================================================
+NON-GOALS
+=========
+
+Do not add:
+
+* online model inference
+* backend sync requirements
+* status polling in dataset mode
+* decision handling in dataset mode
+* live risk scoring
+* staged intervention
+* remote admin control
+
+==================================================
+ACCEPTANCE CRITERIA
+===================
+
+1. Runtime behavior
+
+* In DatasetCollection mode, the app starts without requiring backend connectivity.
+* `BatchProducerService`, `BatchSendService`, `StatusPollService`, `DecisionProcessorService`, and `FeatureUploadService` are not started.
+* Collectors still emit and `SignalWriterService` still writes raw signals locally.
+
+2. Raw data preservation
+
+* `spool/raw_signals.jsonl` grows during collection sessions.
+* local manifests and annotation files are created and updated.
+
+3. Live feature extraction disabled
+
+* no live feature rows are produced solely from running the agent in DatasetCollection mode
+* on-demand extraction from raw signals still works
+
+4. Session workflow
+
+* operator can start, pause/resume, and end a session from the tray
+* operator can start and end an abnormal segment
+* abnormal segments are exported with explicit timestamps and scenario codes
+
+5. Progress tracking
+
+* progress snapshot shows:
+
+  * valid collection days
+  * sessions completed
+  * total active hours
+  * abnormal scenarios completed
+  * abnormal minutes
+  * completion ratio/status
+
+6. Export
+
+* exported package contains raw signals, manifests, annotations, and progress snapshot
+* exported package includes checksums
+
+==================================================
+DELIVERABLES
+============
+
+Return:
+
+1. a concise summary of what was changed
+2. a file-by-file list of modifications and new files
+3. any config changes required in `appsettings.json`
+4. any follow-up TODOs if parts need a second pass
+5. build errors if you hit any, with exact cause
