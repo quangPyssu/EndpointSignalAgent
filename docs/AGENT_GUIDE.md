@@ -22,7 +22,9 @@ This is the **fastest path** for an agent (or new maintainer) to understand how 
 
 ## 2) Service graph (what runs)
 
-Hosted services are registered in `AgentHostBootstrap` in this order:
+Hosted services are mode-aware and registered in `AgentHostBootstrap`.
+
+Always-on services:
 
 1. `EnrollOnStartupService`
 2. `SignalWriterService`
@@ -31,17 +33,27 @@ Hosted services are registered in `AgentHostBootstrap` in this order:
    - `ApplicationUsageCollector`
    - `NetworkContextCollector`
    - `SystemResourceCollector`
-4. Send pipeline:
+4. Feature pipeline:
+   - `FeatureExtractorService` (live extraction is forced off in DatasetCollection mode)
+   - `KeyboardCommandService`
+
+Normal mode only (`Agent:Mode=Normal`):
+5. Send pipeline:
    - `BatchProducerService`
    - `BatchSendService`
-5. Feature pipeline:
-   - `FeatureExtractorService`
+6. Feature maintenance/upload:
    - `FeatureUploadService`
    - `FeatureCleanupService`
-   - `KeyboardCommandService`
-6. Status pipeline:
+7. Status pipeline:
    - `StatusPollService`
    - `DecisionProcessorService`
+
+DatasetCollection mode only (`Agent:Mode=DatasetCollection`):
+- `CollectionSessionService`
+- `AbnormalTaggingService`
+- `ProgressTrackingService`
+- `CollectionManifestService`
+- `DatasetExportService`
 
 ---
 
@@ -63,9 +75,11 @@ Broadcaster sends each signal to two channels:
 - `spool/signals.jsonl` (legacy send-compatible format)
 - `spool/raw_signals.jsonl` (canonical raw collector format)
 
-`BatchProducerService` reads from `spool/signals.jsonl` via `SpoolFileSignalProvider` and enqueues `SignalBatchRequest`.
+In Normal mode, `BatchProducerService` reads from `spool/signals.jsonl` via `SpoolFileSignalProvider` and enqueues `SignalBatchRequest`.
 
-`BatchSendService` sends batches to backend.
+In Normal mode, `BatchSendService` sends batches to backend.
+
+In DatasetCollection mode, backend send/status/decision pipelines are not started.
 
 ### Feature extraction
 
@@ -132,6 +146,16 @@ Primary runtime artifacts under `spool/`:
 - `raw_signals.jsonl`
 - `features.db`
 
+When running in DatasetCollection mode, expect additional manifests in `spool/manifests/`:
+
+- `study_manifest.json`
+- `participant_manifest.json`
+- `session_<sessionId>.json`
+- `session_<sessionId>.annotations.json`
+- `progress_state.json`
+
+And export folders under `exports/participant_<participantId>_<timestamp>/`.
+
 ---
 
 ## 6) Practical debugging order
@@ -152,7 +176,7 @@ When troubleshooting end-to-end behavior, inspect in this sequence:
 - The app is a **WinForms tray application**, not a headless worker executable.
 - Broadcast is explicit: one emitted signal is written to both writer and extractor channels.
 - Feature extractor uses fixed schema window constants (`FeatureSchema.WindowSec=60`, `FeatureSchema.StepSec=30`) and warns if config differs.
-- Backend mode can be disabled with `Backend:UseBackend=false`.
+- In `DatasetCollection` mode, backend is forced off and live extraction is forced off regardless of config values.
 
 ---
 

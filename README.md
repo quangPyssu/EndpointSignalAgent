@@ -2,6 +2,16 @@
 
 Windows tray application that collects endpoint signals, writes local spool artifacts, extracts windowed features, and optionally sends data to backend services.
 
+## Runtime modes
+
+- `Agent:Mode=Normal`
+  - Backend send/status/decision pipelines are enabled when `Backend:UseBackend=true`.
+  - Live feature extraction follows `FeatureExtractor:EnableLiveExtraction`.
+- `Agent:Mode=DatasetCollection`
+  - Backend is forced off (`Backend:UseBackend=false`).
+  - Live extraction is forced off (`FeatureExtractor:EnableLiveExtraction=false`).
+  - Dataset services are enabled for session lifecycle, abnormal tagging, progress tracking, and package export.
+
 ## Start here (for contributors/agents)
 
 1. Read **`docs/AGENT_GUIDE.md`** for a top-down map of runtime flows and key files.
@@ -22,7 +32,15 @@ Windows tray application that collects endpoint signals, writes local spool arti
    - **Status**
    - **Export all features to CSV** (same behavior as Ctrl+O)
    - **Open spool folder**
+   - **Open manifest folder** (DatasetCollection mode)
    - **Pause collection / Resume collection**
+   - DatasetCollection actions:
+     - **Start/Pause/Resume/End collection session**
+     - **Start/End abnormal segment**
+     - **Mark last 5 min abnormal**
+     - **Enter short note**
+     - **Show progress**
+     - **Export dataset package**
    - **Exit**
 4. Use **Exit** for graceful shutdown of hosted services.
 
@@ -33,6 +51,16 @@ Windows tray application that collects endpoint signals, writes local spool arti
 - `signals.offset`
 - `raw_signals.jsonl`
 - `features.db`
+
+In `DatasetCollection` mode, additional artifacts are written under `spool/manifests`:
+
+- `study_manifest.json`
+- `participant_manifest.json`
+- `session_<sessionId>.json`
+- `session_<sessionId>.annotations.json`
+- `progress_state.json`
+
+Dataset package export output is written under `exports/participant_<participantId>_<timestamp>/`.
 
 ## Smooth setup for "start at user logon"
 
