@@ -34,6 +34,27 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _statusMenuItem;
     private readonly ToolStripMenuItem _exportAllFeaturesMenuItem;
     private readonly ToolStripMenuItem _pauseResumeMenuItem;
+    private readonly ToolStripMenuItem _startSessionMenuItem;
+    private readonly ToolStripMenuItem _pauseSessionMenuItem;
+    private readonly ToolStripMenuItem _resumeSessionMenuItem;
+    private readonly ToolStripMenuItem _endSessionMenuItem;
+    private readonly ToolStripMenuItem _startAbnormalMenuItem;
+    private readonly ToolStripMenuItem _endAbnormalMenuItem;
+    private readonly ToolStripMenuItem _markLast5MenuItem;
+    private readonly ToolStripMenuItem _noteMenuItem;
+    private readonly ToolStripMenuItem _openManifestFolderMenuItem;
+    private readonly ToolStripMenuItem _exportDatasetMenuItem;
+    private readonly ToolStripMenuItem _showProgressDetailsMenuItem;
+    private readonly ToolStripMenuItem _progressMenuItem;
+    private readonly ToolStripMenuItem _completionMenuItem;
+    private readonly ToolStripMenuItem _statusProgressMenuItem;
+    private readonly ToolStripMenuItem _totalCollectedMenuItem;
+    private readonly ToolStripMenuItem _activeTimeMenuItem;
+    private readonly ToolStripMenuItem _sessionsMenuItem;
+    private readonly ToolStripMenuItem _daysMenuItem;
+    private readonly ProgressBar _progressBar;
+    private readonly Label _progressPercentLabel;
+    private readonly ToolStripControlHost _progressHost;
     private readonly ILoggerFactory _trayLoggerFactory;
     private readonly ILogger<TrayApplicationContext> _logger;
     private readonly SynchronizationContext _uiContext;
@@ -45,6 +66,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private IAbnormalTaggingService? _abnormalTaggingService;
     private IProgressTrackingService? _progressTrackingService;
     private DatasetExportService? _datasetExportService;
+    private IDatasetShutdownCoordinator? _datasetShutdownCoordinator;
     private DatasetCollectionOptions? _datasetOptions;
     private AgentOptions? _agentOptions;
     private volatile bool _hostRunning;
@@ -66,26 +88,78 @@ public sealed class TrayApplicationContext : ApplicationContext
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         _statusMenuItem = new ToolStripMenuItem("Status", null, (_, _) => ShowStatus());
-        _exportAllFeaturesMenuItem = new ToolStripMenuItem("Export all features to CSV", null, async (_, _) => await ExportAllFeaturesAsync())
-        {
-            Enabled = false
-        };
-        var openSpoolMenuItem = new ToolStripMenuItem("Open spool folder", null, (_, _) => OpenSpoolFolder());
-        _pauseResumeMenuItem = new ToolStripMenuItem("Pause collection", null, (_, _) => ToggleCollectionPause())
-        {
-            Enabled = false
-        };
-        var startSessionMenuItem = new ToolStripMenuItem("Start collection session", null, async (_, _) => await StartSessionAsync()) { Enabled = false };
-        var pauseResumeSessionMenuItem = new ToolStripMenuItem("Pause/resume collection session", null, async (_, _) => await PauseResumeSessionAsync()) { Enabled = false };
-        var endSessionMenuItem = new ToolStripMenuItem("End collection session", null, async (_, _) => await EndSessionAsync()) { Enabled = false };
-        var startAbnormalMenuItem = new ToolStripMenuItem("Start abnormal segment", null, async (_, _) => await StartAbnormalSegmentAsync()) { Enabled = false };
-        var endAbnormalMenuItem = new ToolStripMenuItem("End abnormal segment", null, async (_, _) => await EndAbnormalSegmentAsync()) { Enabled = false };
-        var markLast5MenuItem = new ToolStripMenuItem("Mark last 5 min abnormal", null, async (_, _) => await MarkLastFiveMinutesAsync()) { Enabled = false };
-        var noteMenuItem = new ToolStripMenuItem("Enter short note", null, async (_, _) => await EnterShortNoteAsync()) { Enabled = false };
-        var showProgressMenuItem = new ToolStripMenuItem("Show progress", null, async (_, _) => await ShowProgressAsync()) { Enabled = false };
-        var exportDatasetMenuItem = new ToolStripMenuItem("Export dataset package", null, async (_, _) => await ExportDatasetPackageAsync()) { Enabled = false };
-        var openManifestFolderMenuItem = new ToolStripMenuItem("Open manifest folder", null, (_, _) => OpenManifestFolder()) { Enabled = false };
-        var exitMenuItem = new ToolStripMenuItem("Exit", null, async (_, _) => await ExitAsync());
+        _exportAllFeaturesMenuItem = new ToolStripMenuItem("Export all features to CSV", null, async (_, _) => await ExportAllFeaturesAsync()) { Enabled = false };
+        _pauseResumeMenuItem = new ToolStripMenuItem("Pause collection", null, (_, _) => ToggleCollectionPause()) { Enabled = false };
+        _startSessionMenuItem = new ToolStripMenuItem("Start session", null, async (_, _) => await StartSessionAsync()) { Enabled = false };
+        _pauseSessionMenuItem = new ToolStripMenuItem("Pause session", null, async (_, _) => await PauseSessionAsync()) { Enabled = false };
+        _resumeSessionMenuItem = new ToolStripMenuItem("Resume session", null, async (_, _) => await ResumeSessionAsync()) { Enabled = false };
+        _endSessionMenuItem = new ToolStripMenuItem("End session", null, async (_, _) => await EndSessionAsync()) { Enabled = false };
+        _startAbnormalMenuItem = new ToolStripMenuItem("Start abnormal segment", null, async (_, _) => await StartAbnormalSegmentAsync()) { Enabled = false };
+        _endAbnormalMenuItem = new ToolStripMenuItem("End abnormal segment", null, async (_, _) => await EndAbnormalSegmentAsync()) { Enabled = false };
+        _markLast5MenuItem = new ToolStripMenuItem("Mark last 5 min abnormal", null, async (_, _) => await MarkLastFiveMinutesAsync()) { Enabled = false };
+        _noteMenuItem = new ToolStripMenuItem("Enter short note", null, async (_, _) => await EnterShortNoteAsync()) { Enabled = false };
+        _openManifestFolderMenuItem = new ToolStripMenuItem("Open manifest folder", null, (_, _) => OpenManifestFolder()) { Enabled = false };
+        _exportDatasetMenuItem = new ToolStripMenuItem("Export dataset package", null, async (_, _) => await ExportDatasetPackageAsync()) { Enabled = false };
+        _showProgressDetailsMenuItem = new ToolStripMenuItem("Open progress details...", null, async (_, _) => await ShowProgressAsync()) { Enabled = false };
+
+        _progressBar = new ProgressBar { Minimum = 0, Maximum = 1000, Value = 0, Size = new Size(140, 18), Location = new Point(0, 2) };
+        _progressPercentLabel = new Label { AutoSize = true, Location = new Point(148, 3), Text = "0%" };
+        var progressPanel = new Panel { Width = 220, Height = 24 };
+        progressPanel.Controls.Add(_progressBar);
+        progressPanel.Controls.Add(_progressPercentLabel);
+        _progressHost = new ToolStripControlHost(progressPanel) { AutoSize = false, Size = new Size(230, 28), Enabled = false };
+
+        _completionMenuItem = new ToolStripMenuItem("Completion: 0%") { Enabled = false };
+        _statusProgressMenuItem = new ToolStripMenuItem("Status: Unknown") { Enabled = false };
+        _totalCollectedMenuItem = new ToolStripMenuItem("Total collected: 0h 0m") { Enabled = false };
+        _activeTimeMenuItem = new ToolStripMenuItem("Active time: 0h 0m") { Enabled = false };
+        _sessionsMenuItem = new ToolStripMenuItem("Sessions: 0") { Enabled = false };
+        _daysMenuItem = new ToolStripMenuItem("Days: 0") { Enabled = false };
+
+        _progressMenuItem = new ToolStripMenuItem("Progress") { Enabled = false };
+        _progressMenuItem.DropDownItems.AddRange([
+            _progressHost,
+            _completionMenuItem,
+            _statusProgressMenuItem,
+            _totalCollectedMenuItem,
+            _activeTimeMenuItem,
+            _sessionsMenuItem,
+            _daysMenuItem,
+            new ToolStripSeparator(),
+            _showProgressDetailsMenuItem
+        ]);
+        _progressMenuItem.DropDownOpening += async (_, _) => await RefreshProgressMenuAsync();
+
+        var collectionMenuItem = new ToolStripMenuItem("Collection");
+        collectionMenuItem.DropDownItems.AddRange([
+            _pauseResumeMenuItem,
+            new ToolStripMenuItem("Open spool folder", null, (_, _) => OpenSpoolFolder()),
+            _openManifestFolderMenuItem
+        ]);
+
+        var sessionMenuItem = new ToolStripMenuItem("Session");
+        sessionMenuItem.DropDownItems.AddRange([
+            _startSessionMenuItem,
+            _pauseSessionMenuItem,
+            _resumeSessionMenuItem,
+            _endSessionMenuItem,
+            _noteMenuItem
+        ]);
+
+        var abnormalMenuItem = new ToolStripMenuItem("Abnormal");
+        abnormalMenuItem.DropDownItems.AddRange([
+            _startAbnormalMenuItem,
+            _endAbnormalMenuItem,
+            _markLast5MenuItem
+        ]);
+
+        var exportMenuItem = new ToolStripMenuItem("Export");
+        exportMenuItem.DropDownItems.AddRange([
+            _exportDatasetMenuItem,
+            _exportAllFeaturesMenuItem
+        ]);
+
+        var exitMenuItem = new ToolStripMenuItem("Exit", null, async (_, _) => await ExitAsync("tray_exit"));
 
         _notifyIcon = new NotifyIcon
         {
@@ -95,32 +169,24 @@ public sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = new ContextMenuStrip()
         };
 
+        _notifyIcon.ContextMenuStrip.Opening += async (_, _) => await RefreshMenuStateAsync();
         _notifyIcon.ContextMenuStrip.Items.AddRange([
             _statusMenuItem,
-            _exportAllFeaturesMenuItem,
-            openSpoolMenuItem,
-            openManifestFolderMenuItem,
             new ToolStripSeparator(),
-            _pauseResumeMenuItem,
-            startSessionMenuItem,
-            pauseResumeSessionMenuItem,
-            endSessionMenuItem,
-            startAbnormalMenuItem,
-            endAbnormalMenuItem,
-            markLast5MenuItem,
-            noteMenuItem,
-            showProgressMenuItem,
-            exportDatasetMenuItem,
+            collectionMenuItem,
+            sessionMenuItem,
+            abnormalMenuItem,
+            _progressMenuItem,
+            exportMenuItem,
             new ToolStripSeparator(),
             exitMenuItem
         ]);
 
         _notifyIcon.DoubleClick += (_, _) => ShowStatus();
-
-        _ = StartHostAsync(args, startSessionMenuItem, pauseResumeSessionMenuItem, endSessionMenuItem, startAbnormalMenuItem, endAbnormalMenuItem, markLast5MenuItem, noteMenuItem, showProgressMenuItem, exportDatasetMenuItem, openManifestFolderMenuItem);
+        _ = StartHostAsync(args);
     }
 
-    private async Task StartHostAsync(string[] args, params ToolStripMenuItem[] datasetMenuItems)
+    private async Task StartHostAsync(string[] args)
     {
         try
         {
@@ -141,27 +207,94 @@ public sealed class TrayApplicationContext : ApplicationContext
             _abnormalTaggingService = _host.Services.GetService<IAbnormalTaggingService>();
             _progressTrackingService = _host.Services.GetService<IProgressTrackingService>();
             _datasetExportService = _host.Services.GetService<DatasetExportService>();
+            _datasetShutdownCoordinator = _host.Services.GetService<IDatasetShutdownCoordinator>();
             _datasetOptions = _host.Services.GetService<IOptions<DatasetCollectionOptions>>()?.Value;
             _agentOptions = _host.Services.GetRequiredService<IOptions<AgentOptions>>().Value;
 
             _pauseResumeMenuItem.Enabled = true;
             _exportAllFeaturesMenuItem.Enabled = _keyboardCommandService is not null;
             var datasetMode = AgentModes.IsDatasetCollection(_agentOptions.Mode);
-            foreach (var item in datasetMenuItems)
-            {
-                item.Enabled = datasetMode;
-            }
+            _progressMenuItem.Enabled = datasetMode;
+            _showProgressDetailsMenuItem.Enabled = datasetMode;
+            _exportDatasetMenuItem.Enabled = datasetMode;
+            _openManifestFolderMenuItem.Enabled = datasetMode;
 
             _logger.LogInformation("Host started");
             UpdatePauseMenuText();
+            await RefreshMenuStateAsync();
             await UpdateDatasetSessionStatusAsync();
         }
         catch (Exception ex)
         {
             _logger.LogCritical(ex, "Host startup failed");
             MessageBox.Show($"EndpointSignalAgent failed to start:\n\n{ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            await ExitAsync();
+            await ExitAsync("startup_error");
         }
+    }
+
+    private async Task RefreshMenuStateAsync()
+    {
+        UpdatePauseMenuText();
+
+        var datasetMode = AgentModes.IsDatasetCollection(_agentOptions?.Mode ?? string.Empty);
+        if (!datasetMode || _collectionSessionService is null || _abnormalTaggingService is null)
+        {
+            _startSessionMenuItem.Enabled = false;
+            _pauseSessionMenuItem.Enabled = false;
+            _resumeSessionMenuItem.Enabled = false;
+            _endSessionMenuItem.Enabled = false;
+            _startAbnormalMenuItem.Enabled = false;
+            _endAbnormalMenuItem.Enabled = false;
+            _markLast5MenuItem.Enabled = false;
+            _noteMenuItem.Enabled = false;
+            return;
+        }
+
+        var current = _collectionSessionService.CurrentSession;
+        var hasActiveSession = current is { State: "Running" or "Paused" };
+        var isRunning = current is { State: "Running" };
+        var isPaused = current is { State: "Paused" };
+        var activeAbnormal = await _abnormalTaggingService.GetActiveAnnotationAsync(CancellationToken.None);
+
+        _startSessionMenuItem.Enabled = !hasActiveSession;
+        _pauseSessionMenuItem.Enabled = isRunning;
+        _resumeSessionMenuItem.Enabled = isPaused;
+        _endSessionMenuItem.Enabled = isRunning || isPaused;
+
+        _startAbnormalMenuItem.Enabled = hasActiveSession && activeAbnormal is null;
+        _endAbnormalMenuItem.Enabled = activeAbnormal is not null;
+        _markLast5MenuItem.Enabled = hasActiveSession;
+        _noteMenuItem.Enabled = hasActiveSession;
+    }
+
+    private async Task RefreshProgressMenuAsync()
+    {
+        if (_progressTrackingService is null)
+        {
+            return;
+        }
+
+        var snapshot = await _progressTrackingService.GetTraySnapshotAsync(CancellationToken.None);
+        var ratio = Math.Clamp(snapshot.CompletionRatio, 0, 1);
+        var percent = ratio * 100;
+        _progressBar.Value = Math.Max(_progressBar.Minimum, Math.Min(_progressBar.Maximum, (int)Math.Round(ratio * _progressBar.Maximum)));
+        _progressPercentLabel.Text = $"{percent:0.#}%";
+        _completionMenuItem.Text = $"Completion: {percent:0.#}%";
+        _statusProgressMenuItem.Text = $"Status: {snapshot.CompletionStatus}";
+        _totalCollectedMenuItem.Text = $"Total collected: {FormatDuration(snapshot.TotalRuntimeHours)}";
+        _activeTimeMenuItem.Text = $"Active time: {FormatDuration(snapshot.TotalActiveHours)}";
+        _sessionsMenuItem.Text = $"Sessions: {snapshot.TotalSessionsCompleted}";
+        _daysMenuItem.Text = $"Days: {snapshot.ValidCollectionDays}";
+    }
+
+    private static string FormatDuration(double hours)
+    {
+        var totalMinutes = (int)Math.Max(0, Math.Round(hours * 60));
+        var days = totalMinutes / (24 * 60);
+        var remainder = totalMinutes % (24 * 60);
+        var h = remainder / 60;
+        var m = remainder % 60;
+        return days > 0 ? $"{days}d {h}h {m}m" : $"{h}h {m}m";
     }
 
     private void ShowStatus()
@@ -290,29 +423,26 @@ public sealed class TrayApplicationContext : ApplicationContext
         MessageBox.Show($"Session started:\n{session.SessionId}", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
-    private async Task PauseResumeSessionAsync()
+    private async Task PauseSessionAsync()
     {
         if (_collectionSessionService is null)
         {
             return;
         }
 
-        var current = _collectionSessionService.CurrentSession;
-        if (current is null)
+        await _collectionSessionService.PauseSessionAsync("tray", CancellationToken.None);
+        await _progressTrackingService!.RecalculateAsync(CancellationToken.None);
+        await UpdateDatasetSessionStatusAsync();
+    }
+
+    private async Task ResumeSessionAsync()
+    {
+        if (_collectionSessionService is null)
         {
-            MessageBox.Show("No active session.", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        if (string.Equals(current.State, "Paused", StringComparison.OrdinalIgnoreCase))
-        {
-            await _collectionSessionService.ResumeSessionAsync("tray", CancellationToken.None);
-        }
-        else
-        {
-            await _collectionSessionService.PauseSessionAsync("tray", CancellationToken.None);
-        }
-
+        await _collectionSessionService.ResumeSessionAsync("tray", CancellationToken.None);
         await _progressTrackingService!.RecalculateAsync(CancellationToken.None);
         await UpdateDatasetSessionStatusAsync();
     }
@@ -538,7 +668,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         return Task.CompletedTask;
     }
 
-    private async Task ExitAsync()
+    private async Task ExitAsync(string reason)
     {
         if (Interlocked.Exchange(ref _exiting, 1) == 1)
         {
@@ -546,8 +676,13 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         _logger.LogInformation("Tray exit requested");
-
         _notifyIcon.Visible = false;
+
+        if (_datasetShutdownCoordinator is not null)
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await _datasetShutdownCoordinator.FinalizeAsync(reason, cts.Token);
+        }
 
         if (_host is not null)
         {

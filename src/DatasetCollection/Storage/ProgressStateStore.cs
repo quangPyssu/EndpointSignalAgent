@@ -11,9 +11,7 @@ public sealed class ProgressStateStore
     {
         Directory.CreateDirectory(manifestRoot);
         var path = Path.Combine(manifestRoot, "progress_state.json");
-        var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(progress, JsonOptions), ct);
-        File.Move(tempPath, path, overwrite: true);
+        await AtomicJsonFileWriter.WriteAsync(path, progress, JsonOptions, ct);
     }
 
     public async Task<ProgressStateRecord?> LoadAsync(string manifestRoot, CancellationToken ct)

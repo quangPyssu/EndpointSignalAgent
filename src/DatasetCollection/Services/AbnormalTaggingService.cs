@@ -37,24 +37,26 @@ public sealed class AbnormalTaggingService : IAbnormalTaggingService
         await _gate.WaitAsync(ct);
         try
         {
+            _openAnnotation ??= await FindOpenAnnotationAsync(session.SessionId, ct);
             if (_openAnnotation is not null)
             {
                 return _openAnnotation;
             }
 
+            var now = DateTimeOffset.UtcNow;
             var record = new AbnormalAnnotationRecord(
                 AnnotationId: Guid.NewGuid().ToString("N"),
                 SessionId: session.SessionId,
                 SegmentType: "abnormal",
                 ScenarioCode: scenarioCode,
                 ScenarioLabel: scenarioLabel,
-                StartedAtUtc: DateTimeOffset.UtcNow,
+                StartedAtUtc: now,
                 EndedAtUtc: null,
                 InitiatedBy: initiatedBy,
                 Confidence: confidence,
                 Notes: notes,
                 IsComplete: false,
-                UpdatedAtUtc: DateTimeOffset.UtcNow);
+                UpdatedAtUtc: now);
 
             var list = await GetListAsync(session.SessionId, ct);
             list.Add(record);
@@ -73,17 +75,19 @@ public sealed class AbnormalTaggingService : IAbnormalTaggingService
         await _gate.WaitAsync(ct);
         try
         {
+            _openAnnotation ??= await FindOpenAnnotationAsync(_sessionService.CurrentSession?.SessionId, ct);
             if (_openAnnotation is null)
             {
                 return null;
             }
 
+            var now = DateTimeOffset.UtcNow;
             var ended = _openAnnotation with
             {
-                EndedAtUtc = DateTimeOffset.UtcNow,
+                EndedAtUtc = now,
                 IsComplete = true,
-                UpdatedAtUtc = DateTimeOffset.UtcNow,
-                Notes = string.IsNullOrWhiteSpace(notes) ? _openAnnotation.Notes : $"{_openAnnotation.Notes} | ended_by={initiatedBy} | {notes}"
+                UpdatedAtUtc = now,
+                Notes = MergeNotes(_openAnnotation.Notes, MergeNotes($"ended_by={initiatedBy}", notes))
             };
 
             var list = await GetListAsync(ended.SessionId, ct);
@@ -125,7 +129,7 @@ public sealed class AbnormalTaggingService : IAbnormalTaggingService
             Confidence: confidence,
             Notes: notes,
             IsComplete: true,
-            UpdatedAtUtc: DateTimeOffset.UtcNow);
+            UpdatedAtUtc: end);
 
         await _gate.WaitAsync(ct);
         try
@@ -152,6 +156,31 @@ public sealed class AbnormalTaggingService : IAbnormalTaggingService
         return await GetListAsync(sessionId, ct);
     }
 
+    public async Task<AbnormalAnnotationRecord?> GetActiveAnnotationAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            _openAnnotation ??= await FindOpenAnnotationAsync(_sessionService.CurrentSession?.SessionId, ct);
+            return _openAnnotation;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<AbnormalAnnotationRecord?> FindOpenAnnotationAsync(string? sessionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var list = await GetListAsync(sessionId, ct);
+        return list.LastOrDefault(a => !a.IsComplete || !a.EndedAtUtc.HasValue);
+    }
+
     private async Task<List<AbnormalAnnotationRecord>> GetListAsync(string sessionId, CancellationToken ct)
     {
         if (_cache.TryGetValue(sessionId, out var existing))
@@ -162,5 +191,14 @@ public sealed class AbnormalTaggingService : IAbnormalTaggingService
         var loaded = (await _manifestService.LoadAnnotationsAsync(sessionId, ct)).ToList();
         _cache[sessionId] = loaded;
         return loaded;
+    }
+
+    private static string? MergeNotes(string? left, string? right)
+    {
+        var parts = new[] { left, right }
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim());
+        var merged = string.Join(" | ", parts);
+        return string.IsNullOrWhiteSpace(merged) ? null : merged;
     }
 }

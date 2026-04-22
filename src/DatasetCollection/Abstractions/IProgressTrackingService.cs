@@ -6,4 +6,5 @@ public interface IProgressTrackingService
 {
     Task<ProgressStateRecord> RecalculateAsync(CancellationToken ct);
     Task<ProgressStateRecord> GetCurrentAsync(CancellationToken ct);
+    Task<ProgressTraySnapshot> GetTraySnapshotAsync(CancellationToken ct);
 }

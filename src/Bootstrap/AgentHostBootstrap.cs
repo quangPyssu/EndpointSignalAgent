@@ -214,7 +214,10 @@ public static class AgentHostBootstrap
             builder.Services.AddSingleton<ICollectionSessionService, CollectionSessionService>();
             builder.Services.AddSingleton<IAbnormalTaggingService, AbnormalTaggingService>();
             builder.Services.AddSingleton<IProgressTrackingService, ProgressTrackingService>();
+            builder.Services.AddSingleton<IDatasetShutdownCoordinator, DatasetShutdownCoordinator>();
+            builder.Services.AddSingleton<IDatasetRecoveryService, DatasetRecoveryService>();
             builder.Services.AddHostedService(sp => (ProgressTrackingService)sp.GetRequiredService<IProgressTrackingService>());
+            builder.Services.AddHostedService<DatasetShutdownHooksService>();
             builder.Services.AddHostedService<DatasetSessionStartupService>();
             builder.Services.AddSingleton<DatasetExportService>();
         }

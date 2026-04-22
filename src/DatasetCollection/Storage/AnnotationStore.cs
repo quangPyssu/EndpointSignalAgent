@@ -11,9 +11,7 @@ public sealed class AnnotationStore
     {
         Directory.CreateDirectory(manifestRoot);
         var path = Path.Combine(manifestRoot, $"session_{sessionId}.annotations.json");
-        var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(annotations, JsonOptions), ct);
-        File.Move(tempPath, path, overwrite: true);
+        await AtomicJsonFileWriter.WriteAsync(path, annotations, JsonOptions, ct);
     }
 
     public async Task<IReadOnlyList<AbnormalAnnotationRecord>> LoadAsync(string manifestRoot, string sessionId, CancellationToken ct)

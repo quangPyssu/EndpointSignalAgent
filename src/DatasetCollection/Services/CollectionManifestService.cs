@@ -52,9 +52,6 @@ public sealed class CollectionManifestService : ICollectionManifestService
 
     private static async Task SaveAtomicAsync(string path, object payload, CancellationToken ct)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(payload, JsonOptions), ct);
-        File.Move(tempPath, path, overwrite: true);
+        await AtomicJsonFileWriter.WriteAsync(path, payload, JsonOptions, ct);
     }
 }

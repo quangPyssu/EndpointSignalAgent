@@ -12,20 +12,17 @@ public sealed class ProgressTrackingService : BackgroundService, IProgressTracki
     private readonly DatasetCollectionOptions _options;
     private readonly ICollectionSessionService _sessionService;
     private readonly ICollectionManifestService _manifestService;
-    private readonly IAbnormalTaggingService _taggingService;
     private readonly ICollectionControl _collectionControl;
 
     public ProgressTrackingService(
         IOptions<DatasetCollectionOptions> options,
         ICollectionSessionService sessionService,
         ICollectionManifestService manifestService,
-        IAbnormalTaggingService taggingService,
         ICollectionControl collectionControl)
     {
         _options = options.Value;
         _sessionService = sessionService;
         _manifestService = manifestService;
-        _taggingService = taggingService;
         _collectionControl = collectionControl;
     }
 
@@ -85,7 +82,7 @@ public sealed class ProgressTrackingService : BackgroundService, IProgressTracki
             ThresholdRatio(abnormalMinutes, _options.ExpectedAbnormalMinutesMin)
         };
 
-        var completionRatio = ratioParts.Average();
+        var completionRatio = ClampRatio(ratioParts.Average());
         var progress = new ProgressStateRecord(
             StudySpanWeeks: studySpanWeeks,
             ValidCollectionDays: validCollectionDays,
@@ -95,7 +92,7 @@ public sealed class ProgressTrackingService : BackgroundService, IProgressTracki
             AbnormalScenariosCompleted: abnormalScenarios,
             AbnormalMinutes: abnormalMinutes,
             CoreSignalCoverageDaysOk: validCollectionDays,
-            CompletionStatus: completionRatio >= 1 ? "Complete" : "InProgress",
+            CompletionStatus: completionRatio >= 1 ? "Complete" : "In progress",
             CompletionRatio: completionRatio,
             LastUpdatedUtc: DateTimeOffset.UtcNow);
 
@@ -106,6 +103,18 @@ public sealed class ProgressTrackingService : BackgroundService, IProgressTracki
     public async Task<ProgressStateRecord> GetCurrentAsync(CancellationToken ct)
         => await _manifestService.LoadProgressAsync(ct) ?? await RecalculateAsync(ct);
 
+    public async Task<ProgressTraySnapshot> GetTraySnapshotAsync(CancellationToken ct)
+    {
+        var progress = await GetCurrentAsync(ct);
+        return new ProgressTraySnapshot(
+            TotalRuntimeHours: progress.TotalRuntimeHours,
+            TotalActiveHours: progress.TotalActiveHours,
+            TotalSessionsCompleted: progress.TotalSessionsCompleted,
+            ValidCollectionDays: progress.ValidCollectionDays,
+            CompletionRatio: ClampRatio(progress.CompletionRatio),
+            CompletionStatus: progress.CompletionStatus);
+    }
+
     private static double ThresholdRatio(double actual, double target)
     {
         if (target <= 0)
@@ -115,4 +124,6 @@ public sealed class ProgressTrackingService : BackgroundService, IProgressTracki
 
         return Math.Min(1, actual / target);
     }
+
+    private static double ClampRatio(double ratio) => Math.Clamp(ratio, 0, 1);
 }

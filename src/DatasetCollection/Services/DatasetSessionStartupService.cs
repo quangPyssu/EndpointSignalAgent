@@ -10,6 +10,7 @@ public sealed class DatasetSessionStartupService : IHostedService
 {
     private readonly AgentOptions _agentOptions;
     private readonly DatasetCollectionOptions _datasetOptions;
+    private readonly IDatasetRecoveryService _datasetRecoveryService;
     private readonly ICollectionSessionService _sessionService;
     private readonly IProgressTrackingService _progressTrackingService;
     private readonly ILogger<DatasetSessionStartupService> _logger;
@@ -17,12 +18,14 @@ public sealed class DatasetSessionStartupService : IHostedService
     public DatasetSessionStartupService(
         IOptions<AgentOptions> agentOptions,
         IOptions<DatasetCollectionOptions> datasetOptions,
+        IDatasetRecoveryService datasetRecoveryService,
         ICollectionSessionService sessionService,
         IProgressTrackingService progressTrackingService,
         ILogger<DatasetSessionStartupService> logger)
     {
         _agentOptions = agentOptions.Value;
         _datasetOptions = datasetOptions.Value;
+        _datasetRecoveryService = datasetRecoveryService;
         _sessionService = sessionService;
         _progressTrackingService = progressTrackingService;
         _logger = logger;
@@ -36,7 +39,7 @@ public sealed class DatasetSessionStartupService : IHostedService
             return;
         }
 
-        var recoveredCount = await _sessionService.CloseStaleSessionsAsync("recovered_after_unclean_shutdown=true", "startup-recovery", cancellationToken);
+        var recoveredCount = await _datasetRecoveryService.RecoverDanglingSessionsAsync(cancellationToken);
         if (recoveredCount > 0)
         {
             _logger.LogInformation("Recovered {RecoveredCount} stale dataset session(s) before auto-start.", recoveredCount);
@@ -53,22 +56,7 @@ public sealed class DatasetSessionStartupService : IHostedService
         _logger.LogInformation("Dataset session auto-started at host startup: {SessionId}", session.SessionId);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
-    {
-        if (!AgentModes.IsDatasetCollection(_agentOptions.Mode) || !_datasetOptions.Enabled)
-        {
-            return;
-        }
-
-        var ended = await _sessionService.EndSessionAsync("auto_ended=true|by=shutdown", "shutdown", cancellationToken);
-        if (ended is null)
-        {
-            return;
-        }
-
-        await _progressTrackingService.RecalculateAsync(cancellationToken);
-        _logger.LogInformation("Dataset session auto-ended during shutdown: {SessionId}", ended.SessionId);
-    }
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private bool ShouldRunForDatasetMode()
         => AgentModes.IsDatasetCollection(_agentOptions.Mode)

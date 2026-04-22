@@ -11,7 +11,7 @@ public sealed class SessionManifestStore
     {
         Directory.CreateDirectory(manifestRoot);
         var path = Path.Combine(manifestRoot, $"session_{session.SessionId}.json");
-        await WriteAtomicAsync(path, session, ct);
+        await AtomicJsonFileWriter.WriteAsync(path, session, JsonOptions, ct);
     }
 
     public async Task<IReadOnlyList<CollectionSessionRecord>> LoadAllSessionsAsync(string manifestRoot, CancellationToken ct)
@@ -36,12 +36,5 @@ public sealed class SessionManifestStore
         }
 
         return sessions.OrderBy(s => s.StartedAtUtc ?? DateTimeOffset.MinValue).ToList();
-    }
-
-    private static async Task WriteAtomicAsync<T>(string path, T payload, CancellationToken ct)
-    {
-        var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(payload, JsonOptions), ct);
-        File.Move(tempPath, path, overwrite: true);
     }
 }
