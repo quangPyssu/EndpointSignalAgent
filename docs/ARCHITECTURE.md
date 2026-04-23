@@ -102,6 +102,10 @@ DatasetCollection mode (`Agent:Mode=DatasetCollection`) additionally starts/regi
 - `ProgressTrackingService` (hosted)
 - `CollectionManifestService`
 - `DatasetExportService`
+- `DatasetSessionStartupService` (hosted — restores stale sessions on startup)
+- `DatasetShutdownHooksService` (hosted — flushes open sessions on host stop)
+- `DatasetRecoveryService` (singleton — closes stale open sessions)
+- `DatasetShutdownCoordinator` (singleton — orchestrates graceful exit)
 
 ---
 
@@ -204,3 +208,10 @@ Keyboard command service supports extractor operations (Ctrl+E / Ctrl+P / Ctrl+O
 4. `docs/COLLECTORS.md`
 5. `docs/EXTRACTOR.md`
 6. `docs/AGGREGATOR_SIGNAL_INVENTORY.md`
+7. Per-module references (inside `src/`):
+   - `src/Bootstrap/README.md`
+   - `src/SignalCollection/README.md`
+   - `src/FeatureExtraction/README.md`
+   - `src/DatasetCollection/README.md`
+   - `src/Shared/README.md`
+   - `src/Tray/README.md`

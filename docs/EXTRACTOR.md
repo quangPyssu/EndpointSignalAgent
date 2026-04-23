@@ -84,16 +84,25 @@ Key operations:
 - `GetRangeAsync`, `GetLatestAsync`, `GetAllAsync` - query helpers
 - `DeleteOlderThanAsync` - retention cleanup
 
-`FeatureRow` contains:
+`FeatureRow` fields (from `src/FeatureExtraction/Contracts/FeatureRow.cs`):
 
-- `Id`
-- `DeviceId`
-- `WindowSec`
-- `WindowStartTs`
-- `FeatureVersion`
-- run/profile metadata and source counts
-- `Features` (dictionary payload)
-- `SentFlag` / `SentAt`
+- `Id` — SQLite auto-increment primary key
+- `DeviceId` — device identity string (from enrollment)
+- `WindowSec` — window size in seconds (60 for live extraction)
+- `WindowStartTs` — UTC start of the window
+- `FeatureVersion` — schema version string (currently `"1.2"`)
+- `WindowProfileId` — profile identifier (`"W60_S30"`, `"W120_S60"`, `"W30_S15"`)
+- `WindowSizeSec` — same as `WindowSec`; kept for per-profile on-demand runs
+- `SlideSec` — slide/step in seconds (30 for live)
+- `EventTimeStart` — actual first event time in this window's context slice
+- `EventTimeEnd` — actual last event time considered
+- `ExtractionRunId` — GUID per service instance (live) or per on-demand invocation
+- `FeatureSchemaVersion` — same as `FeatureVersion`; versioned separately for future use
+- `CollectorSchemaVersion` — `null` for live; `"mixed"` for on-demand file replay
+- `SourceCounts` — dictionary of signal domain → count (`application`, `session`, `network`, `system`)
+- `Features` — dictionary of feature column name → `double` value
+- `SentFlag` — whether this row has been uploaded to backend
+- `SentAt` — UTC time of successful upload (nullable)
 
 ---
 

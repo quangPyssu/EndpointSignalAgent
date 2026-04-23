@@ -186,3 +186,15 @@ When troubleshooting end-to-end behavior, inspect in this sequence:
 - `docs/COLLECTORS.md` - collector-level signal semantics.
 - `docs/EXTRACTOR.md` - feature extraction, schema, storage.
 - `docs/AGGREGATOR_SIGNAL_INVENTORY.md` - signal-to-feature mapping.
+
+## 9) Per-module source references
+
+Each `src/` subdirectory has a `README.md` with the file map, interfaces, data flow,
+and invariants for that module:
+
+- `src/Bootstrap/README.md` — DI wiring, options schema, identity, enrollment
+- `src/SignalCollection/README.md` — collectors, broadcasting, spool storage, batch send
+- `src/FeatureExtraction/README.md` — extractor, aggregators, feature store, CSV export
+- `src/DatasetCollection/README.md` — sessions, tagging, progress, manifest storage, export
+- `src/Shared/README.md` — contracts, decision handler, agent state, app categorizer
+- `src/Tray/README.md` — tray shell, menu controls, exit sequence
