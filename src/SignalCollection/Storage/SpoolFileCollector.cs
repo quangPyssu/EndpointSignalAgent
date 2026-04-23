@@ -31,15 +31,9 @@ public sealed class SpoolFileCollector : IDisposable
 
     public async Task WriteAsync(IEnumerable<SignalEvent> signalEvents, CancellationToken ct = default)
     {
-        using var fs = new FileStream(
-            _spoolPath,
-            FileMode.Append,
-            FileAccess.Write,
-            FileShare.Read,
-            bufferSize: 4096,
-            useAsync: true);
-
-        foreach (var ev in signalEvents)
+        var materializedEvents = signalEvents as SignalEvent[] ?? signalEvents.ToArray();
+        var lines = new List<byte[]>(materializedEvents.Length);
+        foreach (var ev in materializedEvents)
         {
             var lineObj = new
             {
@@ -49,12 +43,42 @@ public sealed class SpoolFileCollector : IDisposable
             };
 
             var json = JsonSerializer.Serialize(lineObj, _jsonOptions);
-            var lineBytes = Encoding.UTF8.GetBytes(json + "\n");
-
-            await fs.WriteAsync(lineBytes, ct);
+            lines.Add(Encoding.UTF8.GetBytes(json + "\n"));
         }
 
-        await fs.FlushAsync(ct);
+        var delay = TimeSpan.FromMilliseconds(50);
+        for (var attempt = 1; attempt <= 4; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                using var fs = new FileStream(
+                    _spoolPath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite,
+                    bufferSize: 4096,
+                    useAsync: true);
+
+                foreach (var lineBytes in lines)
+                {
+                    await fs.WriteAsync(lineBytes, ct);
+                }
+
+                await fs.FlushAsync(ct);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                await Task.Delay(delay, ct);
+                delay += delay;
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                await Task.Delay(delay, ct);
+                delay += delay;
+            }
+        }
     }
 
     public void Dispose()

@@ -26,19 +26,38 @@ public sealed class RawSignalFileCollector : IDisposable
 
     public async Task WriteAsync(RawCollectorSignalRecord signalRecord, CancellationToken ct = default)
     {
-        using var fs = new FileStream(
-            _spoolPath,
-            FileMode.Append,
-            FileAccess.Write,
-            FileShare.Read,
-            bufferSize: 4096,
-            useAsync: true);
-
         var json = JsonSerializer.Serialize(signalRecord, _jsonOptions);
         var lineBytes = Encoding.UTF8.GetBytes(json + "\n");
 
-        await fs.WriteAsync(lineBytes, ct);
-        await fs.FlushAsync(ct);
+        var delay = TimeSpan.FromMilliseconds(50);
+        for (var attempt = 1; attempt <= 4; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                using var fs = new FileStream(
+                    _spoolPath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite,
+                    bufferSize: 4096,
+                    useAsync: true);
+
+                await fs.WriteAsync(lineBytes, ct);
+                await fs.FlushAsync(ct);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                await Task.Delay(delay, ct);
+                delay += delay;
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                await Task.Delay(delay, ct);
+                delay += delay;
+            }
+        }
     }
 
     public void Dispose()
