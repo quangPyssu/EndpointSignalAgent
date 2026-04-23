@@ -23,13 +23,69 @@ internal static class AtomicJsonFileWriter
             await stream.FlushAsync(ct);
         }
 
-        if (File.Exists(path))
+        try
         {
-            File.Replace(tempPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            if (File.Exists(path))
+            {
+                await ReplaceWithRetriesAsync(tempPath, path, ct);
+            }
+            else
+            {
+                try
+                {
+                    File.Move(tempPath, path);
+                }
+                catch (IOException) when (File.Exists(path))
+                {
+                    await ReplaceWithRetriesAsync(tempPath, path, ct);
+                }
+            }
         }
-        else
+        finally
         {
-            File.Move(tempPath, path);
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
+    private static async Task ReplaceWithRetriesAsync(string tempPath, string destinationPath, CancellationToken ct)
+    {
+        var delay = TimeSpan.FromMilliseconds(100);
+
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                EnsureWritable(destinationPath);
+                File.Replace(tempPath, destinationPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                return;
+            }
+            catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException) && attempt < 3)
+            {
+                await Task.Delay(delay, ct);
+                delay = delay + delay;
+            }
+        }
+
+        EnsureWritable(destinationPath);
+        File.Copy(tempPath, destinationPath, overwrite: true);
+    }
+
+    private static void EnsureWritable(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var attrs = File.GetAttributes(path);
+        if ((attrs & FileAttributes.ReadOnly) != 0)
+        {
+            File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
         }
     }
 }

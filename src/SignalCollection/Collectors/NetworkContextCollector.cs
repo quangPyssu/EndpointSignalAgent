@@ -129,7 +129,14 @@ public sealed class NetworkContextCollector : SignalCollectorBase
         Directory.CreateDirectory("spool");
         _logger.LogInformation("NetworkContextCollector started.");
 
-        await RefreshPublicIpAsync(stoppingToken, force: true);
+        try
+        {
+            await RefreshPublicIpAsync(stoppingToken, force: true);
+        }
+        catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("NetworkContextCollector initial public IP refresh timed out; continuing with fail status.");
+        }
         var firstTick = BuildTickState(_clock.UtcNow);
         InitializeDebouncers(firstTick);
         await EmitInitialStateAsync(firstTick);
@@ -272,9 +279,14 @@ public sealed class NetworkContextCollector : SignalCollectorBase
             _nextPublicIpAttemptUtc = now + _publicIpPoll;
             IncrementCounter("public_ip_success");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException)
+        {
+            IncrementCounter("public_ip_fail");
+            MarkPublicFailure(now);
         }
         catch
         {
