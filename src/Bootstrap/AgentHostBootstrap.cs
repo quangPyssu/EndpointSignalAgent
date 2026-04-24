@@ -14,6 +14,7 @@ using EndpointSignalAgent.Shared.State;
 using EndpointSignalAgent.SignalCollection.Collectors;
 using EndpointSignalAgent.SignalCollection.Providers;
 using EndpointSignalAgent.SignalCollection.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -40,6 +41,9 @@ public static class AgentHostBootstrap
         }
 
         var isDatasetMode = AgentModes.IsDatasetCollection(configuredMode);
+        var featureExtractorEnabled = builder.Configuration.GetValue<bool?>("FeatureExtractor:Enabled") ?? true;
+        var configuredLiveExtractionEnabled = builder.Configuration.GetValue<bool?>("FeatureExtractor:EnableLiveExtraction") ?? false;
+        var liveExtractionEnabled = featureExtractorEnabled && configuredLiveExtractionEnabled && !isDatasetMode;
 
         builder.Services.AddOptions<BackendOptions>()
             .Bind(builder.Configuration.GetSection("Backend"))
@@ -107,11 +111,15 @@ public static class AgentHostBootstrap
         builder.Services.AddSingleton<EndpointSignalAgent.SignalCollection.Broadcasting.ISignalBroadcaster>(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<EndpointSignalAgent.SignalCollection.Broadcasting.SignalBroadcaster>>();
-            var writers = new[]
+            var writers = new List<ChannelWriter<EndpointSignalAgent.SignalCollection.Broadcasting.BroadcastSignal>>
             {
-                signalWriterChannel.Writer,
-                featureExtractorChannel.Writer
+                signalWriterChannel.Writer
             };
+
+            if (liveExtractionEnabled)
+            {
+                writers.Add(featureExtractorChannel.Writer);
+            }
 
             return new EndpointSignalAgent.SignalCollection.Broadcasting.SignalBroadcaster(logger, writers);
         });

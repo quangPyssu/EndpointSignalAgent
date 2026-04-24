@@ -143,52 +143,72 @@ public sealed class DatasetRecoveryService : IDatasetRecoveryService
             return null;
         }
 
-        DateTimeOffset? latest = null;
-        await using var stream = File.OpenRead(rawPath);
-        using var reader = new StreamReader(stream);
-        while (!reader.EndOfStream)
+        for (var attempt = 1; attempt <= 3; attempt++)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
 
             try
             {
-                using var doc = JsonDocument.Parse(line);
-                var root = doc.RootElement;
-                if (!root.TryGetProperty("ts_utc", out var tsElement))
+                DateTimeOffset? latest = null;
+                await using var stream = new FileStream(
+                    rawPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 4096,
+                    useAsync: true);
+                using var reader = new StreamReader(stream);
+                while (!reader.EndOfStream)
                 {
-                    continue;
-                }
-
-                if (!DateTimeOffset.TryParse(tsElement.GetString(), out var ts))
-                {
-                    continue;
-                }
-
-                if (root.TryGetProperty("session_id", out var sidElement))
-                {
-                    var sid = sidElement.GetString();
-                    if (!string.IsNullOrWhiteSpace(sid) && !string.Equals(sid, sessionId, StringComparison.Ordinal))
+                    ct.ThrowIfCancellationRequested();
+                    var line = await reader.ReadLineAsync(ct);
+                    if (string.IsNullOrWhiteSpace(line))
                     {
                         continue;
                     }
+
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(line);
+                        var root = doc.RootElement;
+                        if (!root.TryGetProperty("ts_utc", out var tsElement))
+                        {
+                            continue;
+                        }
+
+                        if (!DateTimeOffset.TryParse(tsElement.GetString(), out var ts))
+                        {
+                            continue;
+                        }
+
+                        if (root.TryGetProperty("session_id", out var sidElement))
+                        {
+                            var sid = sidElement.GetString();
+                            if (!string.IsNullOrWhiteSpace(sid) && !string.Equals(sid, sessionId, StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+                        }
+
+                        if (!latest.HasValue || ts > latest.Value)
+                        {
+                            latest = ts;
+                        }
+                    }
+                    catch
+                    {
+                        // best effort parsing
+                    }
                 }
 
-                if (!latest.HasValue || ts > latest.Value)
-                {
-                    latest = ts;
-                }
+                return latest;
             }
-            catch
+            catch (IOException) when (attempt < 3)
             {
-                // best effort parsing
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), ct);
             }
         }
 
-        return latest;
+        return null;
     }
 }

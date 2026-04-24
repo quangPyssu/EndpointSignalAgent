@@ -15,6 +15,9 @@ Static class. Single entry point: `BuildHost(args)` → `IHost`.
 - Creates two bounded `Channel<BroadcastSignal>` (capacity 1000, `Wait` on full):
   - **signalWriterChannel** → `SignalWriterService`
   - **featureExtractorChannel** → `FeatureExtractorService`
+- Registers `SignalBroadcaster` with:
+  - always `signalWriterChannel`
+  - `featureExtractorChannel` only when live extraction is truly enabled (`FeatureExtractor:Enabled=true`, `FeatureExtractor:EnableLiveExtraction=true`, and mode is not `DatasetCollection`).
 - Creates `Channel<SignalBatchRequest>` (capacity from `AgentOptions.OutgoingQueueCapacity`, `DropOldest`).
 - Creates `Channel<StatusResponse>` (capacity from `AgentOptions.DecisionQueueCapacity`, `DropOldest`).
 - Always-on hosted services: `EnrollOnStartupService`, `SignalWriterService`,
