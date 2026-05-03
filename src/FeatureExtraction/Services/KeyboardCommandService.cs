@@ -17,7 +17,7 @@ public sealed class KeyboardCommandService : BackgroundService
     private readonly IFeatureStore _featureStore;
     private readonly FeatureExtractorService _featureExtractor;
 
-    public readonly record struct FeatureExportResult(bool Success, string ExportType, int RowCount, string? FilePath, string Message);
+    public readonly record struct FeatureExportResult(bool Success, string ExportType, int RowCount, IReadOnlyList<string> FilePaths, string Message);
 
     public KeyboardCommandService(
         ILogger<KeyboardCommandService> logger,
@@ -79,7 +79,7 @@ public sealed class KeyboardCommandService : BackgroundService
                                  keyInfo.Modifiers.HasFlag(ConsoleModifiers.Shift))
                         {
                             _logger.LogInformation("Ctrl+Shift+X detected - clearing database...");
-                            await ClearDatabaseAsync(ct);
+                            await ClearDatabaseWithConfirmationAsync(ct);
                         }
                     }
 
@@ -102,7 +102,7 @@ public sealed class KeyboardCommandService : BackgroundService
         return ExportFeatureDataAsync(true, ct);
     }
 
-    private async Task ExtractFeaturesFromAllSignalsAsync(CancellationToken ct)
+    public async Task ExtractFeaturesFromAllSignalsAsync(CancellationToken ct)
     {
         try
         {
@@ -158,7 +158,7 @@ public sealed class KeyboardCommandService : BackgroundService
                     Success: true,
                     ExportType: exportType,
                     RowCount: 0,
-                    FilePath: null,
+                    FilePaths: Array.Empty<string>(),
                     Message: $"No {exportType} feature data available to export.");
             }
 
@@ -166,21 +166,25 @@ public sealed class KeyboardCommandService : BackgroundService
             var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "exports");
             Directory.CreateDirectory(exportDir);
 
-            // Generate filename with timestamp
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-            var filename = Path.Combine(exportDir, $"features_{exportType}_{timestamp}.csv");
+            var filePaths = new List<string>();
 
-            // Write CSV file
-            await WriteCsvAsync(filename, rows, ct);
+            foreach (var group in rows.GroupBy(r => string.IsNullOrWhiteSpace(r.WindowProfileId) ? $"W{r.WindowSizeSec}_S{r.SlideSec}" : r.WindowProfileId))
+            {
+                var profileId = group.Key;
+                var filename = Path.Combine(exportDir, $"features_{exportType}_{profileId}_{timestamp}.csv");
+                await WriteCsvAsync(filename, group.ToList(), ct);
+                filePaths.Add(filename);
+            }
 
-            _logger.LogInformation("Exported {Count} {Type} feature rows to {Filename}", rows.Count, exportType, filename);
-            Console.WriteLine($"\n[Export] Successfully exported {rows.Count} {exportType} feature rows to:\n  {filename}\n");
+            _logger.LogInformation("Exported {Count} {Type} feature rows into {FileCount} CSV files", rows.Count, exportType, filePaths.Count);
+            Console.WriteLine($"\n[Export] Successfully exported {rows.Count} {exportType} feature rows into {filePaths.Count} CSV files:\n  {string.Join("\n  ", filePaths)}\n");
             return new FeatureExportResult(
                 Success: true,
                 ExportType: exportType,
                 RowCount: rows.Count,
-                FilePath: filename,
-                Message: $"Successfully exported {rows.Count} {exportType} feature rows.");
+                FilePaths: filePaths,
+                Message: $"Successfully exported {rows.Count} {exportType} feature rows into {filePaths.Count} CSV files.");
         }
         catch (Exception ex)
         {
@@ -190,7 +194,7 @@ public sealed class KeyboardCommandService : BackgroundService
                 Success: false,
                 ExportType: exportAll ? "all" : "unsent",
                 RowCount: 0,
-                FilePath: null,
+                FilePaths: Array.Empty<string>(),
                 Message: ex.Message);
         }
     }
@@ -267,7 +271,15 @@ public sealed class KeyboardCommandService : BackgroundService
         return value;
     }
 
-    private async Task ClearDatabaseAsync(CancellationToken ct)
+    public async Task<int> ClearDatabaseAsync(CancellationToken ct)
+    {
+        var deletedCount = await _featureStore.ClearAllAsync(ct);
+        _logger.LogWarning("Database cleared - deleted {Count} feature rows", deletedCount);
+        Console.WriteLine($"\n[Clear Database] Successfully deleted {deletedCount} feature rows.\n");
+        return deletedCount;
+    }
+
+    private async Task ClearDatabaseWithConfirmationAsync(CancellationToken ct)
     {
         try
         {
@@ -281,10 +293,7 @@ public sealed class KeyboardCommandService : BackgroundService
                 return;
             }
 
-            var deletedCount = await _featureStore.ClearAllAsync(ct);
-
-            _logger.LogWarning("Database cleared - deleted {Count} feature rows", deletedCount);
-            Console.WriteLine($"\n[Clear Database] Successfully deleted {deletedCount} feature rows.\n");
+            await ClearDatabaseAsync(ct);
         }
         catch (Exception ex)
         {

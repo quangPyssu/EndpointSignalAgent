@@ -33,6 +33,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusMenuItem;
     private readonly ToolStripMenuItem _exportAllFeaturesMenuItem;
+    private readonly ToolStripMenuItem _extractRawSignalsToDbMenuItem;
+    private readonly ToolStripMenuItem _clearFeatureDbMenuItem;
     private readonly ToolStripMenuItem _pauseResumeMenuItem;
     private readonly ToolStripMenuItem _startSessionMenuItem;
     private readonly ToolStripMenuItem _pauseSessionMenuItem;
@@ -89,6 +91,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _statusMenuItem = new ToolStripMenuItem("Status", null, (_, _) => ShowStatus());
         _exportAllFeaturesMenuItem = new ToolStripMenuItem("Export all features to CSV", null, async (_, _) => await ExportAllFeaturesAsync()) { Enabled = false };
+        _extractRawSignalsToDbMenuItem = new ToolStripMenuItem("Translate raw_signals.jsonl to DB", null, async (_, _) => await ExtractRawSignalsToDbAsync()) { Enabled = false };
+        _clearFeatureDbMenuItem = new ToolStripMenuItem("Clear feature database", null, async (_, _) => await ClearFeatureDatabaseAsync()) { Enabled = false };
         _pauseResumeMenuItem = new ToolStripMenuItem("Pause collection", null, (_, _) => ToggleCollectionPause()) { Enabled = false };
         _startSessionMenuItem = new ToolStripMenuItem("Start session", null, async (_, _) => await StartSessionAsync()) { Enabled = false };
         _pauseSessionMenuItem = new ToolStripMenuItem("Pause session", null, async (_, _) => await PauseSessionAsync()) { Enabled = false };
@@ -155,8 +159,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         var exportMenuItem = new ToolStripMenuItem("Export");
         exportMenuItem.DropDownItems.AddRange([
-            _exportDatasetMenuItem,
-            _exportAllFeaturesMenuItem
+            _exportDatasetMenuItem
+        ]);
+
+        var databaseMenuItem = new ToolStripMenuItem("Database");
+        databaseMenuItem.DropDownItems.AddRange([
+            _extractRawSignalsToDbMenuItem,
+            _exportAllFeaturesMenuItem,
+            _clearFeatureDbMenuItem
         ]);
 
         var exitMenuItem = new ToolStripMenuItem("Exit", null, async (_, _) => await ExitAsync("tray_exit"));
@@ -178,6 +188,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             abnormalMenuItem,
             _progressMenuItem,
             exportMenuItem,
+            databaseMenuItem,
             new ToolStripSeparator(),
             exitMenuItem
         ]);
@@ -212,7 +223,10 @@ public sealed class TrayApplicationContext : ApplicationContext
             _agentOptions = _host.Services.GetRequiredService<IOptions<AgentOptions>>().Value;
 
             _pauseResumeMenuItem.Enabled = true;
-            _exportAllFeaturesMenuItem.Enabled = _keyboardCommandService is not null;
+            var hasKeyboardService = _keyboardCommandService is not null;
+            _exportAllFeaturesMenuItem.Enabled = hasKeyboardService;
+            _extractRawSignalsToDbMenuItem.Enabled = hasKeyboardService;
+            _clearFeatureDbMenuItem.Enabled = hasKeyboardService;
             var datasetMode = AgentModes.IsDatasetCollection(_agentOptions.Mode);
             _progressMenuItem.Enabled = datasetMode;
             _showProgressDetailsMenuItem.Enabled = datasetMode;
@@ -583,9 +597,9 @@ public sealed class TrayApplicationContext : ApplicationContext
                 return;
             }
 
-            var detail = result.FilePath is null
+            var detail = result.FilePaths.Count == 0
                 ? result.Message
-                : $"{result.Message}\n\nFile:\n{result.FilePath}";
+                : $"{result.Message}\n\nFiles:\n{string.Join("\n", result.FilePaths)}";
 
             MessageBox.Show(detail, "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -593,6 +607,54 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             _logger.LogError(ex, "Tray export-all-features action failed");
             MessageBox.Show($"Feature export failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+
+    private async Task ExtractRawSignalsToDbAsync()
+    {
+        if (_keyboardCommandService is null)
+        {
+            MessageBox.Show("Feature extraction service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            _logger.LogInformation("Tray menu requested raw_signals.jsonl translation into feature DB");
+            await _keyboardCommandService.ExtractFeaturesFromAllSignalsAsync(CancellationToken.None);
+            MessageBox.Show("Raw signals translation finished. Feature rows were written to the local database.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Tray raw-to-db action failed");
+            MessageBox.Show($"Raw signal translation failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task ClearFeatureDatabaseAsync()
+    {
+        if (_keyboardCommandService is null)
+        {
+            MessageBox.Show("Feature database service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var confirm = MessageBox.Show("Delete all feature rows from the local database?", "EndpointSignalAgent", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var deleted = await _keyboardCommandService.ClearDatabaseAsync(CancellationToken.None);
+            MessageBox.Show($"Deleted {deleted} feature rows.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Tray clear-db action failed");
+            MessageBox.Show($"Clear database failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
