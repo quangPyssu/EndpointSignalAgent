@@ -14,7 +14,7 @@ internal static class Program
     private static void Main(string[] args)
     {
         // Toggle this flag to true to enable console output for debugging
-        bool enableConsoleDebug = true; 
+        bool enableConsoleDebug = false; 
         if (enableConsoleDebug)
         {
             AllocConsole();

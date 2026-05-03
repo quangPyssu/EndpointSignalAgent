@@ -164,7 +164,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon = new NotifyIcon
         {
             Text = "EndpointSignalAgent (starting)",
-            Icon = SystemIcons.Application,
+            Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "icon.ico")),
             Visible = true,
             ContextMenuStrip = new ContextMenuStrip()
         };
