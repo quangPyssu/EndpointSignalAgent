@@ -104,6 +104,20 @@ public sealed class KeyboardCommandService : BackgroundService
 
     public async Task ExtractFeaturesFromAllSignalsAsync(CancellationToken ct)
     {
+        Console.Write("\n[Extract] Enter DeviceId (leave blank to cancel): ");
+        var deviceId = (Console.ReadLine() ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            _logger.LogInformation("Feature extraction cancelled - missing DeviceId");
+            Console.WriteLine("[Extract] Cancelled (no DeviceId provided).\n");
+            return;
+        }
+
+        await ExtractFeaturesFromAllSignalsAsync(deviceId, ct);
+    }
+
+    public async Task ExtractFeaturesFromAllSignalsAsync(string deviceId, CancellationToken ct)
+    {
         try
         {
             var spoolPath = Path.Combine(Directory.GetCurrentDirectory(), "spool", "raw_signals.jsonl");
@@ -112,15 +126,6 @@ public sealed class KeyboardCommandService : BackgroundService
             {
                 _logger.LogWarning("Signal file not found: {SpoolPath}", spoolPath);
                 Console.WriteLine($"\n[Extract] Signal file not found: {spoolPath}\n");
-                return;
-            }
-
-            Console.Write("\n[Extract] Enter DeviceId (leave blank to cancel): ");
-            var deviceId = (Console.ReadLine() ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(deviceId))
-            {
-                _logger.LogInformation("Feature extraction cancelled - missing DeviceId");
-                Console.WriteLine("[Extract] Cancelled (no DeviceId provided).\n");
                 return;
             }
 

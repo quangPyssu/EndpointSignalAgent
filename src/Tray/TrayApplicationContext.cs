@@ -621,8 +621,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         try
         {
+            var deviceId = Prompt("Device Id", "Enter DeviceId to tag extracted feature rows:", "");
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                return;
+            }
+
             _logger.LogInformation("Tray menu requested raw_signals.jsonl translation into feature DB");
-            await _keyboardCommandService.ExtractFeaturesFromAllSignalsAsync(CancellationToken.None);
+            await _keyboardCommandService.ExtractFeaturesFromAllSignalsAsync(deviceId.Trim(), CancellationToken.None);
             MessageBox.Show("Raw signals translation finished. Feature rows were written to the local database.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
