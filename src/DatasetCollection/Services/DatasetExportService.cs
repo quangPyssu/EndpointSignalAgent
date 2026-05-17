@@ -64,7 +64,12 @@ public sealed class DatasetExportService
         await File.WriteAllTextAsync(healthPath, JsonSerializer.Serialize(health, JsonOptions), ct);
         files.Add(healthPath);
 
-        var checksums = files.ToDictionary(Path.GetFileName, ComputeSha256, StringComparer.OrdinalIgnoreCase)!;
+        var checksums = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            var name = Path.GetFileName(file);
+            checksums[name] = ComputeSha256(file);
+        }
         var exportManifest = new DatasetExportManifest(
             ExportTimeUtc: DateTimeOffset.UtcNow,
             AgentVersion: agentVersion,
