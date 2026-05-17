@@ -115,10 +115,19 @@ public sealed class KeyboardCommandService : BackgroundService
                 return;
             }
 
+            Console.Write("\n[Extract] Enter DeviceId (leave blank to cancel): ");
+            var deviceId = (Console.ReadLine() ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                _logger.LogInformation("Feature extraction cancelled - missing DeviceId");
+                Console.WriteLine("[Extract] Cancelled (no DeviceId provided).\n");
+                return;
+            }
+
             Console.WriteLine($"\n[Extract] Starting feature extraction from {spoolPath}...");
 
             var startTime = DateTimeOffset.UtcNow;
-            await _featureExtractor.ExtractFeaturesFromFileAsync(spoolPath, ct);
+            await _featureExtractor.ExtractFeaturesFromFileAsync(spoolPath, deviceId, ct);
             var duration = DateTimeOffset.UtcNow - startTime;
 
             Console.WriteLine($"[Extract] Feature extraction completed in {duration.TotalSeconds:F2} seconds\n");

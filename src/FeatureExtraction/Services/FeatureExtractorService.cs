@@ -324,12 +324,16 @@ public sealed class FeatureExtractorService : BackgroundService
         }
     }
 
-    public async Task ExtractFeaturesFromFileAsync(string jsonlPath, CancellationToken ct)
-    {
-        await ExtractFeaturesFromFileAsync(jsonlPath, WindowProfile.DefaultProfiles, ct);
-    }
+    public Task ExtractFeaturesFromFileAsync(string jsonlPath, CancellationToken ct)
+        => ExtractFeaturesFromFileAsync(jsonlPath, deviceId: null, WindowProfile.DefaultProfiles, ct);
 
-    public async Task ExtractFeaturesFromFileAsync(string jsonlPath, IReadOnlyList<WindowProfile> profiles, CancellationToken ct)
+    public Task ExtractFeaturesFromFileAsync(string jsonlPath, string deviceId, CancellationToken ct)
+        => ExtractFeaturesFromFileAsync(jsonlPath, deviceId, WindowProfile.DefaultProfiles, ct);
+
+    public Task ExtractFeaturesFromFileAsync(string jsonlPath, IReadOnlyList<WindowProfile> profiles, CancellationToken ct)
+        => ExtractFeaturesFromFileAsync(jsonlPath, deviceId: null, profiles, ct);
+
+    public async Task ExtractFeaturesFromFileAsync(string jsonlPath, string? deviceId, IReadOnlyList<WindowProfile> profiles, CancellationToken ct)
     {
         _logger.LogInformation("Starting on-demand feature extraction from {Path}", jsonlPath);
 
@@ -339,7 +343,7 @@ public sealed class FeatureExtractorService : BackgroundService
             return;
         }
 
-        var deviceId = await _enrollment.GetIdAsync(ct);
+        deviceId ??= await _enrollment.GetIdAsync(ct);
         var allSignals = await ReadSignalsFromFileAsync(jsonlPath, ct);
         if (allSignals.Count == 0)
         {
