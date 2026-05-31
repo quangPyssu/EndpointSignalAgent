@@ -154,7 +154,7 @@ public sealed class KeyboardCommandService : BackgroundService
             if (exportAll)
             {
                 // Get all feature rows
-                rows = await _featureStore.GetAllAsync(limit: 10000, ct);
+                rows = await _featureStore.GetAllAsync(limit: 0, ct);
                 exportType = "all";
             }
             else

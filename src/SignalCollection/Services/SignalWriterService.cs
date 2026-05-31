@@ -14,6 +14,7 @@ public sealed class SignalWriterService : BackgroundService
     private readonly ILogger<SignalWriterService> _logger;
     private readonly ChannelReader<BroadcastSignal> _reader;
     private readonly IEnrollmentStore _enrollmentStore;
+    private readonly bool _writeRawSignals;
     private readonly string _recordingId = Guid.NewGuid().ToString("N");
     private string? _cachedDeviceId;
 
@@ -25,11 +26,13 @@ public sealed class SignalWriterService : BackgroundService
         _logger = logger;
         _reader = channelReader.Reader;
         _enrollmentStore = enrollmentStore;
+        _writeRawSignals = bool.TryParse(Environment.GetEnvironmentVariable("ESA_WRITE_RAW_SIGNALS"), out var enabled)
+            && enabled;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("SignalWriterService started.");
+        _logger.LogInformation("SignalWriterService started. Raw signal write enabled: {RawSignalsEnabled}", _writeRawSignals);
 
         try
         {
@@ -42,8 +45,11 @@ public sealed class SignalWriterService : BackgroundService
                         new SignalEvent(signal.TimestampUtc, signal.Type, signal.Payload),
                         stoppingToken);
 
-                    using var rawWriter = new RawSignalFileCollector(Path.Combine(Path.GetDirectoryName(signal.SpoolPath) ?? "spool", "raw_signals.jsonl"));
-                    await rawWriter.WriteAsync(BuildRawRecord(signal), stoppingToken);
+                    if (_writeRawSignals)
+                    {
+                        using var rawWriter = new RawSignalFileCollector(Path.Combine(Path.GetDirectoryName(signal.SpoolPath) ?? "spool", "raw_signals.jsonl"));
+                        await rawWriter.WriteAsync(BuildRawRecord(signal), stoppingToken);
+                    }
                 }
                 catch (Exception ex)
                 {

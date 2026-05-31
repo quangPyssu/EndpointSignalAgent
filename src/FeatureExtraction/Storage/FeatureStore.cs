@@ -434,7 +434,13 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync(ct);
 
-            var sql = @"
+            var sql = limit <= 0
+                ? @"
+                SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
+                FROM feature_rows
+                ORDER BY window_start_ts ASC
+            "
+                : @"
                 SELECT id, device_id, window_sec, window_start_ts, feature_version, window_profile_id, window_size_sec, slide_sec, event_time_start, event_time_end, extraction_run_id, feature_schema_version, collector_schema_version, source_counts_json, features_json, sent_flag, sent_at
                 FROM feature_rows
                 ORDER BY window_start_ts ASC
@@ -443,7 +449,10 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
 
             using var command = connection.CreateCommand();
             command.CommandText = sql;
-            command.Parameters.AddWithValue("@limit", limit);
+            if (limit > 0)
+            {
+                command.Parameters.AddWithValue("@limit", limit);
+            }
 
             var rows = new List<FeatureRow>();
             using var reader = await command.ExecuteReaderAsync(ct);
