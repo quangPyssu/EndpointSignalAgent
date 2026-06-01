@@ -132,6 +132,36 @@ internal static class FeatureSchema
         .Concat(SystemColumns)
         .ToArray();
 
+    public const string FeatureVersion13 = "1.3";
+
+    public static readonly string[] TemporalColumns =
+    {
+        // Temporal metadata / quality
+        "session_age_sec",
+        "history_coverage_ratio_h300",
+        "history_coverage_ratio_h600",
+        "is_temporal_warmup_window",
+        "raw_event_count_h300",
+        // Application temporal
+        "category_transition_count_h300",
+        "category_transition_entropy_h300",
+        "app_switch_interval_std_ms_h300",
+        "app_dwell_cv_h300",
+        // Session temporal
+        "active_work_ratio_h300",
+        "active_work_streak_sec",
+        "time_since_unlock_sec",
+        // Network temporal
+        "network_change_count_h300",
+        "time_since_network_change_sec",
+        "network_context_stability_ratio_h600",
+        // System temporal
+        "cpu_high_persistence_h300",
+        "net_throughput_trend_h300",
+        // Cross temporal
+        "active_resource_mismatch_h300"
+    };
+
     public static readonly IReadOnlyDictionary<string, string> CategoryToColumn = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["browser"] = "cat_browser_ratio",
