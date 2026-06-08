@@ -35,14 +35,16 @@ SignalCollectorBase.WriteSignalAsync(...)
         │
         ▼
 ISignalBroadcaster
-  ├──► Writer channel ─► SignalWriterService ─► spool/signals.jsonl + spool/raw_signals.jsonl
-  └──► Feature channel ─► FeatureExtractorService ─► spool/features.db
+  ├──► Writer channel ─► SignalWriterService ──(rotate >50 MB)──► spool/signals.jsonl
+  │                                           └──(ESA_WRITE_RAW_SIGNALS)──► spool/raw_signals.jsonl
+  └──► Feature channel ─► FeatureExtractorService ─► spool/features.db (WAL, 500-row unsent cap)
 
-spool/signals.jsonl ─► SpoolFileSignalProvider ─► BatchProducerService ─► Channel<SignalBatchRequest> ─► BatchSendService ─► Backend /send
+spool/features.db ─► FeatureCsvStreamService ─► Backend /features/row  (one text/csv POST per row)
+                 └──► FeatureCleanupService (1h, prune >500 unsent + 7-day sent retention)
 
 Backend /status ─► StatusPollService ─► Channel<StatusResponse> ─► DecisionProcessorService ─► IDecisionHandler
 
-spool/features.db ─► FeatureUploadService ─► Backend /features
+DeviceGuardService ──(idle poll, P/Invoke)──► LockWorkStation / SetSuspendState
 
 DatasetCollection services:
 spool/manifests/*.json ◄── CollectionSessionService + AbnormalTaggingService + ProgressTrackingService
@@ -58,18 +60,13 @@ Configured in `AgentHostBootstrap`:
 1. **Broadcast channels** (`BroadcastSignal`), capacity 1000 each
    - `BoundedChannelFullMode.Wait`
    - One dedicated reader per channel:
-     - writer channel -> `SignalWriterService`
-     - feature channel -> `FeatureExtractorService`
+     - writer channel → `SignalWriterService`
+     - feature channel → `FeatureExtractorService` (only written when `EnableLiveExtraction=true`)
 
-2. **Outgoing send queue** (`Channel<SignalBatchRequest>`)
-   - Capacity: `Agent:OutgoingQueueCapacity`
-   - Full mode: `DropOldest`
-   - Single writer/reader
-
-3. **Decision queue** (`Channel<StatusResponse>`)
+2. **Decision queue** (`Channel<StatusResponse>`)
    - Capacity: `Agent:DecisionQueueCapacity`
    - Full mode: `DropOldest`
-   - Single writer/reader
+   - Single writer/reader (Normal mode only)
 
 ---
 
@@ -77,6 +74,7 @@ Configured in `AgentHostBootstrap`:
 
 Hosted services are mode-aware:
 
+All modes:
 - `EnrollOnStartupService`
 - `SignalWriterService`
 - `SessionStateCollector`
@@ -84,14 +82,12 @@ Hosted services are mode-aware:
 - `NetworkContextCollector`
 - `SystemResourceCollector`
 - `FeatureExtractorService`
-- `KeyboardCommandService`
+- `FeatureCsvStreamService`
+- `FeatureCleanupService`
+- `DeviceGuardService` *(self-disables when `Agent:DeviceGuard:Enabled=false`)*
 
 Normal mode (`Agent:Mode=Normal`) additionally starts:
 
-- `BatchProducerService`
-- `BatchSendService`
-- `FeatureUploadService`
-- `FeatureCleanupService`
 - `StatusPollService`
 - `DecisionProcessorService`
 
@@ -144,6 +140,7 @@ Dataset exports in `exports/participant_<participantId>_<timestamp>/` include:
 - `UseBackend`
 - `BaseUrl` (required absolute URL when backend enabled)
 - `EnrollPath`, `SendPath`, `StatusPath`, `FeaturesPath`
+- `FeatureRowCsvPath` (default: `/features/row`) — CSV streaming endpoint
 - `TimeoutSeconds`
 
 ### `Agent` (`AgentOptions`)
@@ -153,6 +150,11 @@ Dataset exports in `exports/participant_<participantId>_<timestamp>/` include:
 - `DecisionQueueCapacity` (10..100000)
 - `DefaultReportSeconds` (1..3600)
 - `StatusPollSeconds` (1..3600)
+- `DeviceGuard` section:
+  - `Enabled` (default: `false`)
+  - `IdleLockThresholdSec` (default: `3600`) — 0 = disabled
+  - `IdleSleepThresholdSec` (default: `0`) — 0 = disabled
+  - `PollIntervalSec` (default: `30`)
 
 DatasetCollection mode runtime overrides:
 
@@ -187,7 +189,6 @@ Note: live extractor currently uses fixed schema constants from `FeatureSchema` 
 Tray menu operations from `TrayApplicationContext`:
 
 - Status dialog
-- Export all features to CSV (same path as Ctrl+O flow)
 - Open spool folder
 - Open manifest folder (DatasetCollection mode)
 - Pause/resume collection (`ICollectionControl`)
@@ -195,8 +196,6 @@ Tray menu operations from `TrayApplicationContext`:
 - Abnormal tagging controls (start/end/mark last 5 min)
 - Progress view and dataset package export
 - Exit (graceful host stop)
-
-Keyboard command service supports extractor operations (Ctrl+E / Ctrl+P / Ctrl+O / Ctrl+Shift+X).
 
 ---
 

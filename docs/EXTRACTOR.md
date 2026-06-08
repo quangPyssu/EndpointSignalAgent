@@ -19,9 +19,9 @@ Primary files:
 ISignalBroadcaster
   └──► feature channel (BroadcastSignal)
           └──► FeatureExtractorService
-                  └──► FeatureStore (SQLite: spool/features.db)
-                          ├──► FeatureUploadService (backend /features)
-                          └──► FeatureCleanupService (retention cleanup)
+                  └──► FeatureStore (SQLite WAL: spool/features.db)
+                          ├──► FeatureCsvStreamService (text/csv POST per row → backend /features/row)
+                          └──► FeatureCleanupService (1h: prune >500 unsent rows + 7-day sent retention)
 ```
 
 Live extraction consumes the **feature broadcast channel** (separate from the writer channel used by `SignalWriterService`).
@@ -76,13 +76,17 @@ Backed by SQLite database at:
 
 - `spool/features.db`
 
+WAL journal mode is enabled on every open to ensure crash-safe writes (power loss tolerant).
+
 Key operations:
 
-- `StoreAsync` - insert rows
-- `GetUnsentAsync` - query pending uploads
-- `MarkAsSentAsync` - mark successfully uploaded rows
-- `GetRangeAsync`, `GetLatestAsync`, `GetAllAsync` - query helpers
-- `DeleteOlderThanAsync` - retention cleanup
+- `StoreAsync` — insert rows
+- `GetUnsentAsync` — query pending uploads
+- `MarkAsSentAsync` — mark successfully uploaded rows
+- `CountUnsentAsync` — count unsent rows (used by cleanup cap)
+- `PruneUnsentToCapAsync(cap)` — delete oldest unsent rows keeping newest `cap` rows
+- `GetRangeAsync`, `GetLatestAsync`, `GetAllAsync` — query helpers
+- `DeleteOlderThanAsync` — age-based retention cleanup
 
 `FeatureRow` fields (from `src/FeatureExtraction/Contracts/FeatureRow.cs`):
 
@@ -108,24 +112,26 @@ Key operations:
 
 ## Auxiliary services
 
-### `FeatureUploadService`
+### `FeatureCsvRowSerializer`
 
-- Periodically uploads unsent rows to backend `FeaturesPath`.
-- Marks successful uploads as sent.
-- Uses retry/backoff on transient failures.
+Static helper that converts a `FeatureRow` into a fixed-schema CSV string.
+
+- **Header**: 6 metadata columns (`device_id`, `window_start_ts`, `window_sec`, `slide_sec`, `feature_schema_version`, `extraction_run_id`) followed by all 98 `FeatureSchema.AllColumns` — 104 columns total.
+- **Values**: RFC 4180 quoting, `"G"` format for doubles, missing features → `"0"`.
+
+### `FeatureCsvStreamService`
+
+- Polls `IFeatureStore` every 30 s for unsent rows.
+- POSTs each row individually as `text/csv` (header + data line) to `Backend:FeatureRowCsvPath` (default `/features/row`).
+- On success: marks row sent. On failure: exponential backoff 5 s → 120 s cap; row stays unsent and retries next cycle.
+- When `UseBackend=false`: rows are marked sent immediately (no HTTP call) — acts as a no-op drain in DatasetCollection mode.
+- Self-disables when `FeatureExtractor:Enabled=false`.
 
 ### `FeatureCleanupService`
 
-- Periodically removes older sent rows (retention policy).
-
-### `KeyboardCommandService`
-
-Admin hotkeys:
-
-- `Ctrl+E`: extract from `spool/raw_signals.jsonl`
-- `Ctrl+P`: export unsent features to CSV
-- `Ctrl+O`: export all features to CSV
-- `Ctrl+Shift+X`: clear feature DB
+- Runs every 1 hour.
+- **Hard cap**: if unsent rows exceed 500, prunes oldest unsent rows down to 500 (protects against unbounded DB growth when backend is unreachable).
+- **Age-based**: deletes sent rows older than 7 days.
 
 ---
 
