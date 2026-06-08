@@ -189,6 +189,7 @@ public static class AgentHostBootstrap
 
         builder.Services.AddHostedService<FeatureCsvStreamService>();
         builder.Services.AddHostedService<FeatureCleanupService>();
+        builder.Services.AddHostedService<DeviceGuardService>();
 
         if (!isDatasetMode)
         {

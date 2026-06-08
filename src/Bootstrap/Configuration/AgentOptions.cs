@@ -19,4 +19,21 @@ public sealed class AgentOptions
 
     public int OutgoingQueueCapacity { get; set; } = 300;
     public int DecisionQueueCapacity { get; set; } = 300;
+
+    public DeviceGuardOptions DeviceGuard { get; set; } = new();
+
+    public sealed class DeviceGuardOptions
+    {
+        /// <summary>Enable idle-based lock/sleep enforcement.</summary>
+        public bool Enabled { get; set; } = false;
+
+        /// <summary>Lock workstation after this many idle seconds. 0 = disabled.</summary>
+        public int IdleLockThresholdSec { get; set; } = 3600;
+
+        /// <summary>Sleep device after this many idle seconds. 0 = disabled.</summary>
+        public int IdleSleepThresholdSec { get; set; } = 0;
+
+        /// <summary>How often to check idle state (seconds).</summary>
+        public int PollIntervalSec { get; set; } = 30;
+    }
 }
