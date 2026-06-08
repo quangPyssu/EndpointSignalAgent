@@ -133,17 +133,6 @@ public static class AgentHostBootstrap
         builder.Services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-            return Channel.CreateBounded<SignalBatchRequest>(new BoundedChannelOptions(opts.OutgoingQueueCapacity)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleWriter = true,
-                SingleReader = true
-            });
-        });
-
-        builder.Services.AddSingleton(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
             return Channel.CreateBounded<StatusResponse>(new BoundedChannelOptions(opts.DecisionQueueCapacity)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
@@ -198,16 +187,8 @@ public static class AgentHostBootstrap
         builder.Services.AddSingleton<FeatureExtractorService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FeatureExtractorService>());
 
-        builder.Services.AddSingleton<KeyboardCommandService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<KeyboardCommandService>());
-
         if (!isDatasetMode)
         {
-            builder.Services.AddHostedService<BatchProducerService>();
-            builder.Services.AddHostedService<BatchSendService>();
-            builder.Services.AddHostedService<FeatureUploadService>();
-            builder.Services.AddHostedService<FeatureCleanupService>();
-
             builder.Services.AddSingleton<IAgentState, AgentState>();
             builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
             builder.Services.AddHostedService<StatusPollService>();

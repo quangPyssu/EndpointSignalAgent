@@ -2,7 +2,6 @@ using EndpointSignalAgent.Bootstrap;
 using EndpointSignalAgent.Bootstrap.Configuration;
 using EndpointSignalAgent.DatasetCollection.Abstractions;
 using EndpointSignalAgent.DatasetCollection.Services;
-using EndpointSignalAgent.FeatureExtraction.Services;
 using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -63,7 +62,6 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private IHost? _host;
     private ICollectionControl? _collectionControl;
-    private KeyboardCommandService? _keyboardCommandService;
     private ICollectionSessionService? _collectionSessionService;
     private IAbnormalTaggingService? _abnormalTaggingService;
     private IProgressTrackingService? _progressTrackingService;
@@ -213,7 +211,6 @@ public sealed class TrayApplicationContext : ApplicationContext
             await _host.StartAsync();
             _hostRunning = true;
             _collectionControl = _host.Services.GetRequiredService<ICollectionControl>();
-            _keyboardCommandService = _host.Services.GetService<KeyboardCommandService>();
             _collectionSessionService = _host.Services.GetService<ICollectionSessionService>();
             _abnormalTaggingService = _host.Services.GetService<IAbnormalTaggingService>();
             _progressTrackingService = _host.Services.GetService<IProgressTrackingService>();
@@ -223,10 +220,9 @@ public sealed class TrayApplicationContext : ApplicationContext
             _agentOptions = _host.Services.GetRequiredService<IOptions<AgentOptions>>().Value;
 
             _pauseResumeMenuItem.Enabled = true;
-            var hasKeyboardService = _keyboardCommandService is not null;
-            _exportAllFeaturesMenuItem.Enabled = hasKeyboardService;
-            _extractRawSignalsToDbMenuItem.Enabled = hasKeyboardService;
-            _clearFeatureDbMenuItem.Enabled = hasKeyboardService;
+            _exportAllFeaturesMenuItem.Enabled = false;
+            _extractRawSignalsToDbMenuItem.Enabled = false;
+            _clearFeatureDbMenuItem.Enabled = false;
             var datasetMode = AgentModes.IsDatasetCollection(_agentOptions.Mode);
             _progressMenuItem.Enabled = datasetMode;
             _showProgressDetailsMenuItem.Enabled = datasetMode;
@@ -578,90 +574,22 @@ public sealed class TrayApplicationContext : ApplicationContext
         MessageBox.Show($"Dataset package exported:\n{Path.GetFullPath(folder)}", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
-    private async Task ExportAllFeaturesAsync()
+    private Task ExportAllFeaturesAsync()
     {
-        if (_keyboardCommandService is null)
-        {
-            MessageBox.Show("Feature export service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        try
-        {
-            _logger.LogInformation("Tray menu requested full feature export (equivalent to Ctrl+O)");
-            var result = await _keyboardCommandService.ExportAllFeatureDataAsync(CancellationToken.None);
-
-            if (!result.Success)
-            {
-                MessageBox.Show($"Feature export failed: {result.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var detail = result.FilePaths.Count == 0
-                ? result.Message
-                : $"{result.Message}\n\nFiles:\n{string.Join("\n", result.FilePaths)}";
-
-            MessageBox.Show(detail, "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Tray export-all-features action failed");
-            MessageBox.Show($"Feature export failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        MessageBox.Show("Feature export is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return Task.CompletedTask;
     }
 
-
-    private async Task ExtractRawSignalsToDbAsync()
+    private Task ExtractRawSignalsToDbAsync()
     {
-        if (_keyboardCommandService is null)
-        {
-            MessageBox.Show("Feature extraction service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        try
-        {
-            var deviceId = Prompt("Device Id", "Enter DeviceId to tag extracted feature rows:", "");
-            if (string.IsNullOrWhiteSpace(deviceId))
-            {
-                return;
-            }
-
-            _logger.LogInformation("Tray menu requested raw_signals.jsonl translation into feature DB");
-            await _keyboardCommandService.ExtractFeaturesFromAllSignalsAsync(deviceId.Trim(), CancellationToken.None);
-            MessageBox.Show("Raw signals translation finished. Feature rows were written to the local database.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Tray raw-to-db action failed");
-            MessageBox.Show($"Raw signal translation failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        MessageBox.Show("Raw signal extraction is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return Task.CompletedTask;
     }
 
-    private async Task ClearFeatureDatabaseAsync()
+    private Task ClearFeatureDatabaseAsync()
     {
-        if (_keyboardCommandService is null)
-        {
-            MessageBox.Show("Feature database service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        var confirm = MessageBox.Show("Delete all feature rows from the local database?", "EndpointSignalAgent", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-        if (confirm != DialogResult.Yes)
-        {
-            return;
-        }
-
-        try
-        {
-            var deleted = await _keyboardCommandService.ClearDatabaseAsync(CancellationToken.None);
-            MessageBox.Show($"Deleted {deleted} feature rows.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Tray clear-db action failed");
-            MessageBox.Show($"Clear database failed: {ex.Message}", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        MessageBox.Show("Feature database service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return Task.CompletedTask;
     }
 
     private (string Code, string Label)? SelectScenarioCode()
