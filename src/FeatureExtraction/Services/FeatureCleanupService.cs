@@ -10,18 +10,13 @@ namespace EndpointSignalAgent.FeatureExtraction.Services;
 /// </summary>
 public sealed class FeatureCleanupService : BackgroundService
 {
+    private const int UnsentRowHardCap = 500;
     private readonly ILogger<FeatureCleanupService> _logger;
     private readonly IFeatureStore _featureStore;
-
-    // Keep sent features for 7 days
     private readonly TimeSpan _retentionPeriod = TimeSpan.FromDays(7);
-    
-    // Run cleanup daily
-    private readonly TimeSpan _cleanupInterval = TimeSpan.FromHours(24);
+    private readonly TimeSpan _cleanupInterval = TimeSpan.FromHours(1);
 
-    public FeatureCleanupService(
-        ILogger<FeatureCleanupService> logger,
-        IFeatureStore featureStore)
+    public FeatureCleanupService(ILogger<FeatureCleanupService> logger, IFeatureStore featureStore)
     {
         _logger = logger;
         _featureStore = featureStore;
@@ -29,22 +24,20 @@ public sealed class FeatureCleanupService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("FeatureCleanupService started (Retention: {Days} days, Interval: {Hours}h)",
-            _retentionPeriod.TotalDays, _cleanupInterval.TotalHours);
-
+        _logger.LogInformation("FeatureCleanupService started (cap={Cap}, retention={Days}d, interval={H}h)",
+            UnsentRowHardCap, _retentionPeriod.TotalDays, _cleanupInterval.TotalHours);
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
                 await Task.Delay(_cleanupInterval, stoppingToken);
-
                 try
                 {
-                    var cutoff = DateTimeOffset.UtcNow - _retentionPeriod;
-                    
-                    _logger.LogInformation("Running feature cleanup (cutoff: {Cutoff})", cutoff);
-                    
-                    await _featureStore.DeleteOlderThanAsync(cutoff, stoppingToken);
+                    var unsentCount = await _featureStore.CountUnsentAsync(stoppingToken);
+                    if (unsentCount > UnsentRowHardCap)
+                        await _featureStore.PruneUnsentToCapAsync(UnsentRowHardCap, stoppingToken);
+
+                    await _featureStore.DeleteOlderThanAsync(DateTimeOffset.UtcNow - _retentionPeriod, stoppingToken);
                 }
                 catch (Exception ex)
                 {
@@ -52,11 +45,7 @@ public sealed class FeatureCleanupService : BackgroundService
                 }
             }
         }
-        catch (OperationCanceledException)
-        {
-            _logger.LogInformation("FeatureCleanupService is shutting down");
-        }
-
+        catch (OperationCanceledException) { }
         _logger.LogInformation("FeatureCleanupService stopped");
     }
 }

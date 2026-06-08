@@ -51,6 +51,9 @@ public interface IFeatureStore
     /// Clear all feature rows from the database
     /// </summary>
     Task<int> ClearAllAsync(CancellationToken ct = default);
+
+    Task<int> CountUnsentAsync(CancellationToken ct = default);
+    Task<int> PruneUnsentToCapAsync(int cap, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -67,15 +70,15 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
     private const string CurrentFeatureVersion = "1.0";
 
     public FeatureStore(ILogger<FeatureStore> logger)
+        : this(logger, Path.Combine(Directory.GetCurrentDirectory(), "spool", "features.db"))
+    {
+    }
+
+    public FeatureStore(ILogger<FeatureStore> logger, string dbPath)
     {
         _logger = logger;
-        
-        // Store in spool directory
-        var spoolDir = Path.Combine(Directory.GetCurrentDirectory(), "spool");
-        Directory.CreateDirectory(spoolDir);
-        
-        _dbPath = Path.Combine(spoolDir, "features.db");
-        
+        _dbPath = dbPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_dbPath))!);
         _logger.LogInformation("FeatureStore initialized with database: {DbPath}", _dbPath);
     }
 
@@ -90,6 +93,10 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
 
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync(ct);
+
+            using var walCmd = connection.CreateCommand();
+            walCmd.CommandText = "PRAGMA journal_mode=WAL;";
+            await walCmd.ExecuteNonQueryAsync(ct);
 
             var createTableSql = @"
                 CREATE TABLE IF NOT EXISTS feature_rows (
@@ -423,6 +430,42 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
         {
             _logger.LogError(ex, "Failed to delete old feature rows");
         }
+    }
+
+    public async Task<int> CountUnsentAsync(CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        await connection.OpenAsync(ct);
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM feature_rows WHERE sent_flag = 0";
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+    }
+
+    /// <summary>
+    /// Deletes the oldest unsent rows so at most <paramref name="cap"/> unsent rows remain.
+    /// Sent rows are unaffected.
+    /// </summary>
+    public async Task<int> PruneUnsentToCapAsync(int cap, CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        await connection.OpenAsync(ct);
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            DELETE FROM feature_rows
+            WHERE sent_flag = 0
+              AND id NOT IN (
+                  SELECT id FROM feature_rows
+                  WHERE sent_flag = 0
+                  ORDER BY window_start_ts DESC
+                  LIMIT @cap
+              )";
+        cmd.Parameters.AddWithValue("@cap", cap);
+        var deleted = await cmd.ExecuteNonQueryAsync(ct);
+        if (deleted > 0)
+            _logger.LogWarning("Pruned {Count} oldest unsent feature rows to enforce cap of {Cap}", deleted, cap);
+        return deleted;
     }
 
     public async Task<List<FeatureRow>> GetAllAsync(int limit = 10000, CancellationToken ct = default)
