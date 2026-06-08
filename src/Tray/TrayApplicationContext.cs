@@ -31,9 +31,6 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusMenuItem;
-    private readonly ToolStripMenuItem _exportAllFeaturesMenuItem;
-    private readonly ToolStripMenuItem _extractRawSignalsToDbMenuItem;
-    private readonly ToolStripMenuItem _clearFeatureDbMenuItem;
     private readonly ToolStripMenuItem _pauseResumeMenuItem;
     private readonly ToolStripMenuItem _startSessionMenuItem;
     private readonly ToolStripMenuItem _pauseSessionMenuItem;
@@ -88,9 +85,6 @@ public sealed class TrayApplicationContext : ApplicationContext
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         _statusMenuItem = new ToolStripMenuItem("Status", null, (_, _) => ShowStatus());
-        _exportAllFeaturesMenuItem = new ToolStripMenuItem("Export all features to CSV", null, async (_, _) => await ExportAllFeaturesAsync()) { Enabled = false };
-        _extractRawSignalsToDbMenuItem = new ToolStripMenuItem("Translate raw_signals.jsonl to DB", null, async (_, _) => await ExtractRawSignalsToDbAsync()) { Enabled = false };
-        _clearFeatureDbMenuItem = new ToolStripMenuItem("Clear feature database", null, async (_, _) => await ClearFeatureDatabaseAsync()) { Enabled = false };
         _pauseResumeMenuItem = new ToolStripMenuItem("Pause collection", null, (_, _) => ToggleCollectionPause()) { Enabled = false };
         _startSessionMenuItem = new ToolStripMenuItem("Start session", null, async (_, _) => await StartSessionAsync()) { Enabled = false };
         _pauseSessionMenuItem = new ToolStripMenuItem("Pause session", null, async (_, _) => await PauseSessionAsync()) { Enabled = false };
@@ -160,13 +154,6 @@ public sealed class TrayApplicationContext : ApplicationContext
             _exportDatasetMenuItem
         ]);
 
-        var databaseMenuItem = new ToolStripMenuItem("Database");
-        databaseMenuItem.DropDownItems.AddRange([
-            _extractRawSignalsToDbMenuItem,
-            _exportAllFeaturesMenuItem,
-            _clearFeatureDbMenuItem
-        ]);
-
         var exitMenuItem = new ToolStripMenuItem("Exit", null, async (_, _) => await ExitAsync("tray_exit"));
 
         _notifyIcon = new NotifyIcon
@@ -186,7 +173,6 @@ public sealed class TrayApplicationContext : ApplicationContext
             abnormalMenuItem,
             _progressMenuItem,
             exportMenuItem,
-            databaseMenuItem,
             new ToolStripSeparator(),
             exitMenuItem
         ]);
@@ -220,9 +206,6 @@ public sealed class TrayApplicationContext : ApplicationContext
             _agentOptions = _host.Services.GetRequiredService<IOptions<AgentOptions>>().Value;
 
             _pauseResumeMenuItem.Enabled = true;
-            _exportAllFeaturesMenuItem.Enabled = false;
-            _extractRawSignalsToDbMenuItem.Enabled = false;
-            _clearFeatureDbMenuItem.Enabled = false;
             var datasetMode = AgentModes.IsDatasetCollection(_agentOptions.Mode);
             _progressMenuItem.Enabled = datasetMode;
             _showProgressDetailsMenuItem.Enabled = datasetMode;
@@ -572,24 +555,6 @@ public sealed class TrayApplicationContext : ApplicationContext
         var version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
         var folder = await _datasetExportService.ExportParticipantPackageAsync(_datasetOptions.ParticipantId, version, CancellationToken.None);
         MessageBox.Show($"Dataset package exported:\n{Path.GetFullPath(folder)}", "Dataset collection", MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
-    private Task ExportAllFeaturesAsync()
-    {
-        MessageBox.Show("Feature export is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        return Task.CompletedTask;
-    }
-
-    private Task ExtractRawSignalsToDbAsync()
-    {
-        MessageBox.Show("Raw signal extraction is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        return Task.CompletedTask;
-    }
-
-    private Task ClearFeatureDatabaseAsync()
-    {
-        MessageBox.Show("Feature database service is not available.", "EndpointSignalAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        return Task.CompletedTask;
     }
 
     private (string Code, string Label)? SelectScenarioCode()
