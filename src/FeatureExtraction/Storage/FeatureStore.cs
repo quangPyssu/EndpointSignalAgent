@@ -67,8 +67,6 @@ public sealed class FeatureStore : IFeatureStore, IDisposable
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _initialized;
 
-    private const string CurrentFeatureVersion = "1.0";
-
     public FeatureStore(ILogger<FeatureStore> logger)
         : this(logger, Path.Combine(Directory.GetCurrentDirectory(), "spool", "features.db"))
     {

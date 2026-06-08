@@ -65,9 +65,7 @@ public static class AgentHostBootstrap
                 o.Mode = string.IsNullOrWhiteSpace(o.Mode) ? AgentModes.DatasetCollection : o.Mode;
             })
             .Validate(o => AgentModes.IsValid(o.Mode), "Agent:Mode must be either 'Normal' or 'DatasetCollection'")
-            .Validate(o => o.OutgoingQueueCapacity is >= 10 and <= 100_000, "Agent:OutgoingQueueCapacity out of range")
             .Validate(o => o.DecisionQueueCapacity is >= 10 and <= 100_000, "Agent:DecisionQueueCapacity out of range")
-            .Validate(o => o.DefaultReportSeconds is >= 1 and <= 3600, "Agent:DefaultReportSeconds out of range")
             .Validate(o => o.StatusPollSeconds is >= 1 and <= 3600, "Agent:StatusPollSeconds out of range")
             .ValidateOnStart();
 

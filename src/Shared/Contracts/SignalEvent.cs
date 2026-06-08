@@ -28,7 +28,6 @@ public enum SignalEventType
 
     AppSwitchRate,
 
-    WifiSsidHash,
     LocalNetworkChanged,
     VpnStateChanged,
     WifiLinkChanged,
