@@ -187,6 +187,9 @@ public static class AgentHostBootstrap
         builder.Services.AddSingleton<FeatureExtractorService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FeatureExtractorService>());
 
+        builder.Services.AddHostedService<FeatureCsvStreamService>();
+        builder.Services.AddHostedService<FeatureCleanupService>();
+
         if (!isDatasetMode)
         {
             builder.Services.AddSingleton<IAgentState, AgentState>();
