@@ -40,6 +40,7 @@ public sealed class SignalWriterService : BackgroundService
             {
                 try
                 {
+                    SpoolRotation.RotateIfNeeded(signal.SpoolPath);
                     using var writer = new SpoolFileCollector(signal.SpoolPath);
                     await writer.WriteAsync(
                         new SignalEvent(signal.TimestampUtc, signal.Type, signal.Payload),
@@ -47,7 +48,9 @@ public sealed class SignalWriterService : BackgroundService
 
                     if (_writeRawSignals)
                     {
-                        using var rawWriter = new RawSignalFileCollector(Path.Combine(Path.GetDirectoryName(signal.SpoolPath) ?? "spool", "raw_signals.jsonl"));
+                        var rawPath = Path.Combine(Path.GetDirectoryName(signal.SpoolPath) ?? "spool", "raw_signals.jsonl");
+                        SpoolRotation.RotateIfNeeded(rawPath);
+                        using var rawWriter = new RawSignalFileCollector(rawPath);
                         await rawWriter.WriteAsync(BuildRawRecord(signal), stoppingToken);
                     }
                 }
@@ -105,4 +108,18 @@ public sealed class SignalWriterService : BackgroundService
         SignalKind.PreAggregated => "pre_aggregated",
         _ => "event"
     };
+}
+
+internal static class SpoolRotation
+{
+    internal const long DefaultThresholdBytes = 50 * 1024 * 1024; // 50 MB
+
+    internal static void RotateIfNeeded(string spoolPath, long thresholdBytes = DefaultThresholdBytes)
+    {
+        if (!File.Exists(spoolPath)) return;
+        if (new FileInfo(spoolPath).Length < thresholdBytes) return;
+
+        var bakPath = spoolPath + ".bak";
+        File.Move(spoolPath, bakPath, overwrite: true);
+    }
 }
