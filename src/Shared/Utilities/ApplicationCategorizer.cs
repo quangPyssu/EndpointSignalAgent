@@ -1,5 +1,7 @@
 namespace EndpointSignalAgent.Shared.Utilities;
 
+using System.Diagnostics;
+
 /// <summary>
 /// Provides application categorization based on process executable names.
 /// </summary>
@@ -129,16 +131,27 @@ public static class ApplicationCategorizer
     {
         var normalized = NormalizeProcessName(exeName);
         if (string.IsNullOrWhiteSpace(normalized))
-        {
             return "Other";
-        }
 
         if (s_appCategoryMap.TryGetValue(normalized, out var category))
+            return category;
+
+        var inferredKey = normalized; // preserve the process name for caching
+
+        category = InferFromName(inferredKey);
+        if (category != "Other")
         {
+            s_appCategoryMap[inferredKey] = category;
             return category;
         }
 
-        return "Other";
+        category = CategorizeFromFileInfo(exeName);
+        if (!s_appCategoryMap.ContainsKey(inferredKey)) // check whether it has been cached before
+        {
+            s_appCategoryMap[inferredKey] = category;
+        }
+
+        return category;
     }
 
     public static IEnumerable<string> GetAllCategories()
@@ -183,5 +196,39 @@ public static class ApplicationCategorizer
         }
 
         return new string(buffer[..len]);
+    }
+
+    private static string InferFromName(string name) => name switch
+    {
+        _ when name.EndsWith("browser")                         => "Browser",
+        _ when name.EndsWith("studio") || name.EndsWith("ide")  => "IDE",
+        _ when name.EndsWith("term") || name.EndsWith("console")=> "Terminal",
+        _ when name.EndsWith("chat") || name.EndsWith("meet")   => "Comms",
+        _ when name.EndsWith("mail")                            => "Email",
+        _ when name.EndsWith("db") || name.EndsWith("sql")      => "Database",
+        _ when name.EndsWith("player") || name.EndsWith("media")=> "Media",
+        _ when name.Contains("remote") || name.Contains("rdp")  => "RemoteAccess",
+        _                                                       => "Other"
+    };
+
+
+    private static string CategorizeFromFileInfo(string exePath)
+    {
+        if (!File.Exists(exePath)) return "Other";
+        
+        var info = FileVersionInfo.GetVersionInfo(exePath);
+        
+        // FileDescription is usually the human-readable app name
+        var description = (info.FileDescription ?? info.ProductName ?? "").ToLowerInvariant();
+        
+        return description switch
+        {
+            _ when description.Contains("browser")    => "Browser",
+            _ when description.Contains("terminal")   => "Terminal",
+            _ when description.Contains("studio")     => "IDE",
+            _ when description.Contains("mail")       => "Email",
+            // ...
+            _                                         => "Other"
+        };
     }
 }
