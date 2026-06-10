@@ -10,10 +10,11 @@ This document describes the current system resource path:
 
 `SystemResourceCollector` is a raw sampler/emitter.
 
-- Poll interval: `2s` (`PeriodicTimer`).
+- Timer: `PeriodicTimer` at `2s` (kept fast for responsiveness on lock-clear).
+- Work cadence: `2s` when session is unlocked; `30s` when session is locked (time-gate pattern).
 - Signal type: `SystemResourceTick`.
 - Signal kind: `state_sample`.
-- Native cadence: `2` seconds.
+- Native cadence: `2` seconds (unlocked) / `30` seconds (locked).
 - Native aggregation: `null`.
 - No rolling 60-second sample buffer.
 - No 15-second summary emission path.

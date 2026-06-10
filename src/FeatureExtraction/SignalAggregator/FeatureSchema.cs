@@ -2,7 +2,7 @@ namespace EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 
 internal static class FeatureSchema
 {
-    public const string FeatureVersion = "1.2";
+    public const string FeatureVersion = "1.2.1";
     public const int WindowSec = 60;
     public const int StepSec = 30;
 
@@ -125,11 +125,18 @@ internal static class FeatureSchema
         "has_system_data"
     };
 
+    public static readonly string[] QualityColumns =
+    {
+        "has_collection_gap",
+        "in_warm_up"
+    };
+
     public static readonly string[] AllColumns = AppColumns
         .Concat(SessionColumns)
         .Concat(NetworkColumns)
         .Concat(CrossColumns)
         .Concat(SystemColumns)
+        .Concat(QualityColumns)
         .ToArray();
 
     public static readonly IReadOnlyDictionary<string, string> CategoryToColumn = new Dictionary<string, string>(StringComparer.Ordinal)

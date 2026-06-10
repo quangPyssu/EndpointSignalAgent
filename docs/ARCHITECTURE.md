@@ -179,6 +179,7 @@ DatasetCollection mode runtime overrides:
 - `WindowSizeSeconds` (10..3600)
 - `WindowSlideSeconds` (5..3600)
 - `MaxEventsPerWindow` (100..100000)
+- `WarmUpAfterResumeSec` (default: `30`) — seconds post-`PowerResume` during which feature windows are flagged `in_warm_up=1`
 
 Note: live extractor currently uses fixed schema constants from `FeatureSchema` (60s/30s) and logs a warning if config values differ.
 

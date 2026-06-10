@@ -25,9 +25,12 @@ public sealed class SessionStateCollector : SignalCollectorBase
     private DateTimeOffset _lastIdleSampleUtc = DateTimeOffset.MinValue;
     private bool _systemEventsSessionWatcherEnabled;
     private DateTimeOffset _lastWtsLockEventUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset? _lastSuspendUtc;
 
     private bool _isSessionLocked;
     private string? _userPresence;
+
+    private readonly ICollectionControl _collectionControl;
 
     private SessionEventWindowListener? _sessionAndDisplayListener;
 
@@ -43,6 +46,7 @@ public sealed class SessionStateCollector : SignalCollectorBase
         : base(@"spool\signals.jsonl", broadcaster, collectionControl)
     {
         _logger = logger;
+        _collectionControl = collectionControl;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -157,6 +161,51 @@ public sealed class SessionStateCollector : SignalCollectorBase
         }
     }
 
+    private void OnPowerSuspend()
+    {
+        _lastSuspendUtc = DateTimeOffset.UtcNow;
+        // If the process restarts instead of resuming, this gap is not persisted and will be silently lost.
+        EnqueueSignal(SignalEventType.PowerSuspend, new Dictionary<string, string>
+        {
+            ["reason"] = "PBT_APMSUSPEND"
+        });
+    }
+
+    private void OnPowerResume()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var resumePayload = new Dictionary<string, string>
+        {
+            ["reason"] = "PBT_APMRESUMEAUTOMATIC"
+        };
+
+        if (_lastSuspendUtc.HasValue)
+        {
+            var suspendUtc = _lastSuspendUtc.Value;
+            var gapSec = (int)(now - suspendUtc).TotalSeconds;
+
+            resumePayload["suspendUtc"] = suspendUtc.ToString("o");
+            resumePayload["gapSec"] = gapSec.ToString();
+
+            EnqueueSignal(SignalEventType.PowerResume, resumePayload);
+
+            EnqueueSignal(SignalEventType.CollectionGapDetected, new Dictionary<string, string>
+            {
+                ["gapStartUtc"] = suspendUtc.ToString("o"),
+                ["gapEndUtc"]   = now.ToString("o"),
+                ["gapSec"]      = gapSec.ToString(),
+                ["reason"]      = "sleep"
+            });
+
+            _lastSuspendUtc = null;
+        }
+        else
+        {
+            EnqueueSignal(SignalEventType.PowerResume, resumePayload);
+        }
+    }
+
     private void StartSessionAndDisplayWatcher()
     {
         try
@@ -165,7 +214,9 @@ public sealed class SessionStateCollector : SignalCollectorBase
                 _logger,
                 OnDisplayStateChanged,
                 OnSessionStateChanged,
-                OnUserPresenceChanged);
+                OnUserPresenceChanged,
+                OnPowerSuspend,
+                OnPowerResume);
             _sessionAndDisplayListener.Start();
             _logger.LogInformation("SessionStateCollector: session/display hidden-window watcher started");
         }
@@ -227,6 +278,7 @@ public sealed class SessionStateCollector : SignalCollectorBase
         }
 
         _isSessionLocked = stableLockState;
+        _collectionControl.SetSessionLocked(stableLockState);
 
         EnqueueSignal(
             stableLockState ? SignalEventType.SessionLock : SignalEventType.SessionUnlock,
@@ -586,6 +638,8 @@ public sealed class SessionStateCollector : SignalCollectorBase
         private readonly Action<DisplayStateChange> _onDisplayChange;
         private readonly Action<SessionStateChange> _onSessionChange;
         private readonly Action<PresenceChange> _onPresenceChange;
+        private readonly Action _onPowerSuspend;
+        private readonly Action _onPowerResume;
 
         private Thread? _thread;
         private IntPtr _hwnd = IntPtr.Zero;
@@ -596,6 +650,10 @@ public sealed class SessionStateCollector : SignalCollectorBase
 
         private const int WM_POWERBROADCAST = 0x0218;
         private const int PBT_POWERSETTINGCHANGE = 0x8013;
+        private const int PBT_APMSUSPEND = 0x0004;
+        // PBT_APMRESUMEAUTOMATIC (0x0012) is emitted on all wakes — user-initiated wakes also raise
+        // PBT_APMRESUMESUSPEND (0x0007), but handling RESUMEAUTOMATIC alone is sufficient on modern Windows.
+        private const int PBT_APMRESUMEAUTOMATIC = 0x0012;
         private const int WM_WTSSESSION_CHANGE = 0x02B1;
         private const int WM_CLOSE = 0x0010;
 
@@ -613,12 +671,16 @@ public sealed class SessionStateCollector : SignalCollectorBase
             ILogger logger,
             Action<DisplayStateChange> onDisplayChange,
             Action<SessionStateChange> onSessionChange,
-            Action<PresenceChange> onPresenceChange)
+            Action<PresenceChange> onPresenceChange,
+            Action onPowerSuspend,
+            Action onPowerResume)
         {
             _logger = logger;
             _onDisplayChange = onDisplayChange;
             _onSessionChange = onSessionChange;
             _onPresenceChange = onPresenceChange;
+            _onPowerSuspend = onPowerSuspend;
+            _onPowerResume = onPowerResume;
         }
 
         public void Start()
@@ -767,10 +829,24 @@ public sealed class SessionStateCollector : SignalCollectorBase
 
         private IntPtr WndProcImpl(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
-            if ((int)msg == WM_POWERBROADCAST && (int)wParam == PBT_POWERSETTINGCHANGE)
+            if ((int)msg == WM_POWERBROADCAST)
             {
-                ParsePowerSettingChange(lParam);
-                return new IntPtr(1);
+                var eventId = (int)wParam;
+                if (eventId == PBT_POWERSETTINGCHANGE)
+                {
+                    ParsePowerSettingChange(lParam);
+                    return new IntPtr(1);
+                }
+                if (eventId == PBT_APMSUSPEND)
+                {
+                    _onPowerSuspend();
+                    return IntPtr.Zero;
+                }
+                if (eventId == PBT_APMRESUMEAUTOMATIC)
+                {
+                    _onPowerResume();
+                    return IntPtr.Zero;
+                }
             }
 
             if ((int)msg == WM_WTSSESSION_CHANGE)

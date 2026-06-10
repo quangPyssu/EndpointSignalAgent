@@ -44,8 +44,10 @@ Legend (Kind):
 | `WifiSsidChanged` | `NetworkContextCollector` | StateChange | debounced identity change | `wifiSsid`, `wifiUp`, `wifiBssidHash`, `wifiIdentityConfidence`, `wifiIdentityReason`, *(optional)* `initial` | SSID/BSSID are hashed (privacy-preserving). |
 | `LocalNetworkChanged` | `NetworkContextCollector` | StateChange | debounced fingerprint change | `localPrefix`, `localNetworkHash`, `localIpFamily`, `localPrefixHash`, `localNetworkReason`, *(optional)* `initial` | Values are hashed/coarsened (privacy-preserving). |
 | `PublicIpBucketChanged` | `NetworkContextCollector` | StateChange | debounced bucket change | `publicIpBucket`, `publicIpAgeSeconds`, `publicIpFetchStatus`, *(optional)* `initial` | Public IP bucket is coarsened then hashed (IPv4 /24, IPv6 /48). |
-| `SystemResourceTick` | `SystemResourceCollector` | StateSample | periodic (2s) | `cpu_available`, `cpu_pct`, `mem_available`, `mem_used_pct`, `mem_avail_mb`, `mem_total_mb`, `gpu_available`, `gpu_pct`, `gpu_mem_used_pct`, `gpu_engine_active_count`, `swap_available`, `net_rx_kbps`, `net_tx_kbps` | Best-effort sampling; availability flags indicate native API support. |
-| `WifiSsidHash` | *(legacy enum value)* | Event | n/a | n/a | Defined in enum but not used by current collectors/aggregators. Use `WifiSsidChanged` instead. |
+| `SystemResourceTick` | `SystemResourceCollector` | StateSample | periodic (2s unlocked / 30s locked) | `cpu_available`, `cpu_pct`, `mem_available`, `mem_used_pct`, `mem_avail_mb`, `mem_total_mb`, `gpu_available`, `gpu_pct`, `gpu_mem_used_pct`, `gpu_engine_active_count`, `swap_available`, `net_rx_kbps`, `net_tx_kbps` | Best-effort sampling; availability flags indicate native API support. Cadence reduces to 30s when session is locked. |
+| `PowerSuspend` | `SessionStateCollector` | Event | `WM_POWERBROADCAST` / `PBT_APMSUSPEND` | `reason` | Machine entering sleep or hibernate. `reason=PBT_APMSUSPEND`. |
+| `PowerResume` | `SessionStateCollector` | Event | `WM_POWERBROADCAST` / `PBT_APMRESUMEAUTOMATIC` | `reason`, *(optional)* `suspendUtc`, `gapSec` | Machine woke from sleep/hibernate. `suspendUtc` and `gapSec` present when a preceding `PowerSuspend` was observed. |
+| `CollectionGapDetected` | `SessionStateCollector` | Event | follows `PowerResume` (when suspend was seen) | `gapStartUtc`, `gapEndUtc`, `gapSec`, `reason` | Marks a collection-unavailability interval. Feature windows overlapping this gap are flagged `has_collection_gap=1`. `reason=sleep`. |
 
 ## Source references
 

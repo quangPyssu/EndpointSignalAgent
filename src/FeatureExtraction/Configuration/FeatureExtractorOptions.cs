@@ -32,4 +32,10 @@ public sealed class FeatureExtractorOptions
     /// When false, features are only extracted on-demand (e.g., via Ctrl+E).
     /// </summary>
     public bool EnableLiveExtraction { get; set; } = true;
+
+    /// <summary>
+    /// Seconds to flag feature windows as in_warm_up after a PowerResume event.
+    /// Windows flagged in_warm_up are excluded from rolling risk scoring.
+    /// </summary>
+    public int WarmUpAfterResumeSec { get; set; } = 30;
 }

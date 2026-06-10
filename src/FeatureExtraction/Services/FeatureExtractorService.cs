@@ -39,6 +39,10 @@ public sealed class FeatureExtractorService : BackgroundService
     private readonly SystemResourceFeatureAggregator _systemResourceAggregator = new();
     private readonly string _liveExtractionRunId = Guid.NewGuid().ToString("N");
 
+    private readonly List<(DateTimeOffset Start, DateTimeOffset End)> _collectionGaps = new();
+    private DateTimeOffset _warmUpUntilUtc = DateTimeOffset.MinValue;
+    private readonly object _gapLock = new();
+
     public FeatureExtractorService(
         ILogger<FeatureExtractorService> logger,
         IFeatureExtractorChannelReader channelReader,
@@ -163,6 +167,31 @@ public sealed class FeatureExtractorService : BackgroundService
                 CompactBufferLocked((_nextWindowStartUtc ?? signal.TimestampUtc) - TimeSpan.FromSeconds(FeatureSchema.WindowSec));
             }
         }
+
+        if (signal.Type == SignalEventType.CollectionGapDetected)
+        {
+            if (signal.Payload.TryGetValue("gapStartUtc", out var startStr) &&
+                signal.Payload.TryGetValue("gapEndUtc", out var endStr) &&
+                DateTimeOffset.TryParse(startStr, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var gapStart) &&
+                DateTimeOffset.TryParse(endStr, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var gapEnd))
+            {
+                lock (_gapLock)
+                {
+                    _collectionGaps.Add((gapStart, gapEnd));
+                }
+            }
+        }
+
+        if (signal.Type == SignalEventType.PowerResume)
+        {
+            lock (_gapLock)
+            {
+                _warmUpUntilUtc = signal.TimestampUtc
+                    + TimeSpan.FromSeconds(_options.Value.WarmUpAfterResumeSec);
+            }
+        }
     }
 
     private async Task TryEmitDueWindowsAsync(string deviceId, CancellationToken ct, bool flushAllAvailable = false)
@@ -188,6 +217,22 @@ public sealed class FeatureExtractorService : BackgroundService
             foreach (var job in jobs)
             {
                 var features = ExtractWindowFeatures(job.Context, job.Window);
+
+                bool hasGap;
+                bool inWarmUp;
+                lock (_gapLock)
+                {
+                    hasGap = WindowOverlapsGap(job.Window.StartUtc, job.Window.EndUtc, _collectionGaps);
+                    inWarmUp = IsInWarmUp(job.Window.StartUtc, _warmUpUntilUtc);
+
+                    // Prune gaps that ended well before this window — no future window can overlap them.
+                    var pruneBeforeUtc = job.Window.StartUtc - TimeSpan.FromSeconds(FeatureSchema.WindowSec * 2);
+                    _collectionGaps.RemoveAll(g => g.End < pruneBeforeUtc);
+                }
+
+                features["has_collection_gap"] = hasGap ? 1.0 : 0.0;
+                features["in_warm_up"] = inWarmUp ? 1.0 : 0.0;
+
                 var row = FeatureRow.CreateNew(
                     deviceId: deviceId,
                     windowSec: FeatureSchema.WindowSec,
@@ -276,7 +321,10 @@ public sealed class FeatureExtractorService : BackgroundService
             SignalEventType.VpnStateChanged,
             SignalEventType.WifiLinkChanged,
             SignalEventType.WifiSsidChanged,
-            SignalEventType.PublicIpBucketChanged
+            SignalEventType.PublicIpBucketChanged,
+            SignalEventType.PowerSuspend,
+            SignalEventType.PowerResume,
+            SignalEventType.CollectionGapDetected
         };
 
         var latestBeforeCutoffByType = _eventBuffer
@@ -375,6 +423,11 @@ public sealed class FeatureExtractorService : BackgroundService
                 }
 
                 var features = ExtractWindowFeatures(context, window);
+
+                // Quality flags default to 0 for historical replay — gap detection requires live signal stream
+                features["has_collection_gap"] = 0.0;
+                features["in_warm_up"] = 0.0;
+
                 var row = FeatureRow.CreateNew(
                     deviceId: deviceId,
                     windowSec: profile.WindowSizeSec,
@@ -502,4 +555,13 @@ public sealed class FeatureExtractorService : BackgroundService
             ["system"] = context.Count(s => s.Type is SignalEventType.SystemResourceTick)
         };
     }
+
+    internal static bool WindowOverlapsGap(
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        IEnumerable<(DateTimeOffset Start, DateTimeOffset End)> gaps)
+        => gaps.Any(g => g.Start < windowEnd && g.End > windowStart);
+
+    internal static bool IsInWarmUp(DateTimeOffset windowStart, DateTimeOffset warmUpUntilUtc)
+        => windowStart < warmUpUntilUtc;
 }

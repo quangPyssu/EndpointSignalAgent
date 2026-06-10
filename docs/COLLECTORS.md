@@ -36,7 +36,12 @@ ISignalBroadcaster
 
 - Keeps per-collector spool path metadata.
 - Forwards events to `ISignalBroadcaster`.
+- Exposes `protected bool IsSessionLocked` derived from the singleton `ICollectionControl` — polling subclasses use this to pace at 30s when the session is locked.
 - No internal file lock/semaphore in current implementation.
+
+`ICollectionControl` (`src/SignalCollection/Services/CollectionControl.cs`) exposes:
+- `IsPaused` / `Pause()` / `Resume()` — operator pause/resume from tray
+- `IsSessionLocked` / `SetSessionLocked(bool)` — set by `SessionStateCollector` on every debounced lock/unlock; read by polling collectors via the base class accessor
 
 ---
 
@@ -55,9 +60,9 @@ ISignalBroadcaster
 Uses a **state machine pattern** with:
 - **Input channel**: Unbounded, single-reader, multi-writer channel for observations and timer ticks
 - **Three concurrent timers**:
-  1. Fallback polling: `3s` interval (always active)
-  2. Debounce polling: `200ms` interval (activated only during pending transitions)
-  3. Switch rate tick: `1s` interval (for window emission)
+  1. Fallback polling: `PeriodicTimer` at `3s`; actual cadence is `3s` (unlocked) or `30s` (session locked) via time-gate
+  2. Debounce polling: `200ms` interval (activated only during pending transitions; not affected by lock state)
+  3. Switch rate tick: `1s` interval (for window emission; not affected by lock state)
 - **Foreground sources**:
   - Primary: `SetWinEventHook` with `EVENT_SYSTEM_FOREGROUND` (preferred, event-driven)
   - Fallback: Manual polling via `GetForegroundWindow` + `GetWindowThreadProcessId`
@@ -181,11 +186,11 @@ Raw export provenance:
 
 ### Signals emitted
 
-- `SystemResourceTick` (raw 2-second CPU/RAM/GPU/network state sample)
+- `SystemResourceTick` (raw CPU/RAM/GPU/network state sample)
 
 ### Architecture
 
-- Polling collector (`2s`) with immediate emit per sample
+- `PeriodicTimer` at `2s`; actual work cadence is `2s` (unlocked) or `30s` (session locked) via time-gate pattern
 - No collector-side rolling summary window
 - Best-effort native sampling with explicit availability flags
 
@@ -207,6 +212,7 @@ Raw export provenance:
 - `IdleSample`
 - `ScreenSaverOn`, `ScreenSaverOff`
 - `DisplayOn`, `DisplayOff`, `DisplayDimmed`
+- `PowerSuspend`, `PowerResume`, `CollectionGapDetected`
 
 ### Architecture
 
@@ -264,7 +270,7 @@ Payload fields:
 - `reason` (e.g., `WTS_SESSION_LOCK`, `SessionLock`, `SessionUnlock`)
 
 Debounced via `_sessionLockDebouncer` (2 confirmations or 2s settle time).
-Updates internal `_isSessionLocked` state for adaptive polling cadence.
+Updates internal `_isSessionLocked` state for adaptive polling cadence, and calls `ICollectionControl.SetSessionLocked` so other collectors pace accordingly.
 
 #### `IdleSample`
 Emitted when idle bucket changes (adaptive bucketing):
@@ -333,7 +339,9 @@ Generic state transition tracker used for all debouncing:
   - `RegisterPowerSettingNotification` for three GUIDs (display state, monitor power, user presence)
   - `WTSRegisterSessionNotification` for session lock/unlock events (`NOTIFY_FOR_THIS_SESSION = 0`)
 - **Message handling**:
-  - `WM_POWERBROADCAST` (0x0218) with `PBT_POWERSETTINGCHANGE` (0x8013) → parses `POWERBROADCAST_SETTING` structure
+  - `WM_POWERBROADCAST` (0x0218) with `PBT_POWERSETTINGCHANGE` (0x8013) → parses `POWERBROADCAST_SETTING` structure for display/presence GUIDs
+  - `WM_POWERBROADCAST` with `PBT_APMSUSPEND` (0x0004) → calls `OnPowerSuspend` callback (records `_lastSuspendUtc`, emits `PowerSuspend`)
+  - `WM_POWERBROADCAST` with `PBT_APMRESUMEAUTOMATIC` (0x0012) → calls `OnPowerResume` callback (emits `PowerResume` + `CollectionGapDetected` with gap duration)
   - `WM_WTSSESSION_CHANGE` (0x02B1) → parses wParam for lock/unlock reason code
   - `WM_CLOSE` (0x0010) → posts quit message to exit message loop
 - **Lifecycle**:
@@ -390,7 +398,7 @@ No final state flush is emitted (relies on natural polling loop cancellation).
 ### Behavior summary
 
 - Uses a modular pipeline (snapshot provider, primary interface resolver, route reader, RAS reader, WLAN reader, hashing service, clock).
-- Tick interval is `3s` (`PeriodicTimer`), with separate public IP refresh cadence (`60s`) and exponential backoff on failures.
+- `PeriodicTimer` at `3s`; actual work cadence is `3s` (unlocked) or `30s` (session locked) via time-gate pattern. Public IP refresh cadence is `60s` with exponential backoff on failures.
 - Public IP providers are currently failover-based: `ipify` (`https://api.ipify.org`) and `ifconfig.me` (`https://ifconfig.me/ip`).
 - Uses shared `HttpClient` with `2s` timeout and `5-minute` pooled connection lifetime.
 - Network state changes are debounced with `SignalDebouncer<T>` before emission:

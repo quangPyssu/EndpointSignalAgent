@@ -25,6 +25,7 @@ public sealed class NetworkContextCollector : SignalCollectorBase
     private readonly LocalNetworkFingerprintBuilder _localNetworkBuilder;
 
     private readonly TimeSpan _poll = TimeSpan.FromSeconds(3);
+    private readonly TimeSpan _lockedPoll = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _publicIpPoll = TimeSpan.FromSeconds(60);
     private readonly TimeSpan _debounceWindow = TimeSpan.FromSeconds(6);
     private readonly int _debounceConsecutive = 2;
@@ -142,11 +143,18 @@ public sealed class NetworkContextCollector : SignalCollectorBase
         await EmitInitialStateAsync(firstTick);
 
         using var timer = new PeriodicTimer(_poll);
+        var lastSampleUtc = DateTimeOffset.MinValue;
+
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try
             {
                 var now = _clock.UtcNow;
+                var cadence = IsSessionLocked ? _lockedPoll : _poll;
+                if ((now - lastSampleUtc) < cadence)
+                    continue;
+
+                lastSampleUtc = now;
                 await RefreshPublicIpAsync(stoppingToken, force: false);
                 var tick = BuildTickState(now);
                 await ProcessTickAsync(tick, now);

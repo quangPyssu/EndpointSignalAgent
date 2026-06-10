@@ -15,6 +15,7 @@ public sealed class SystemResourceCollector : SignalCollectorBase
 {
     private readonly ILogger<SystemResourceCollector> _logger;
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(2);
+    private readonly TimeSpan _lockedPollInterval = TimeSpan.FromSeconds(30);
     private readonly SystemResourceSampler _sampler;
 
     private sealed record ResourceSample(
@@ -49,6 +50,7 @@ public sealed class SystemResourceCollector : SignalCollectorBase
         _logger.LogInformation("SystemResourceCollector started.");
 
         using var timer = new PeriodicTimer(_pollInterval);
+        var lastSampleUtc = DateTimeOffset.MinValue;
         try
         {
             while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -56,6 +58,11 @@ public sealed class SystemResourceCollector : SignalCollectorBase
                 try
                 {
                     var now = DateTimeOffset.UtcNow;
+                    var cadence = IsSessionLocked ? _lockedPollInterval : _pollInterval;
+                    if ((now - lastSampleUtc) < cadence)
+                        continue;
+
+                    lastSampleUtc = now;
                     var sample = _sampler.CaptureSample(now);
                     await WriteSignalAsync(SignalEventType.SystemResourceTick, BuildPayload(sample));
                 }

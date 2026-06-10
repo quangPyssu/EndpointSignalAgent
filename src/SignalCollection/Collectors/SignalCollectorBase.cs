@@ -21,6 +21,8 @@ public abstract class SignalCollectorBase : BackgroundService
         _collectionControl = collectionControl;
     }
 
+    protected bool IsSessionLocked => _collectionControl.IsSessionLocked;
+
     protected async Task WriteSignalAsync(SignalEventType type, Dictionary<string, string> payload)
     {
         if (_collectionControl.IsPaused)

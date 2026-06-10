@@ -39,7 +39,11 @@ public enum SignalEventType
     WifiSsidChanged,
     PublicIpBucketChanged,
 
-    SystemResourceTick
+    SystemResourceTick,
+
+    PowerSuspend,
+    PowerResume,
+    CollectionGapDetected
 }
 
 public static class SignalEventTypeParser

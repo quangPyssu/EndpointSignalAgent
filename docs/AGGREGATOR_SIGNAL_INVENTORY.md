@@ -16,6 +16,11 @@ Signals used by aggregators:
 - Network context: `VpnStateChanged`, `WifiLinkChanged`, `WifiSsidChanged`, `LocalNetworkChanged`, `PublicIpBucketChanged`
 - System resources: `SystemResourceTick`
 
+Signals consumed directly by `FeatureExtractorService` (not by per-domain aggregators):
+- `PowerSuspend` — recorded as gap start timestamp; triggers `has_collection_gap` / `in_warm_up` stamping on overlapping windows
+- `PowerResume` — sets post-resume warm-up expiry (`in_warm_up` flag)
+- `CollectionGapDetected` — gap interval stored in `FeatureExtractorService._collectionGaps`; pruned after windows pass
+
 Signals defined but not used by current aggregators:
 - `Heartbeat`
 - `WifiSsidHash` (legacy enum value)

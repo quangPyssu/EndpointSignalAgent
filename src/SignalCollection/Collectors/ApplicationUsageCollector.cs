@@ -19,6 +19,7 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
     private readonly EndpointSignalAgent.SignalCollection.Collectors.Network.IHashingService _hashing;
 
     private readonly TimeSpan _fallbackPollInterval = TimeSpan.FromSeconds(3);
+    private readonly TimeSpan _lockedFallbackPollInterval = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _switchRateTickInterval = TimeSpan.FromSeconds(1);
     private readonly TimeSpan _debouncePollInterval = TimeSpan.FromMilliseconds(200);
 
@@ -124,9 +125,18 @@ public sealed class ApplicationUsageCollector : SignalCollectorBase
         try
         {
             using var timer = new PeriodicTimer(_fallbackPollInterval);
+            var lastPollUtc = DateTimeOffset.MinValue;
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                _input.Writer.TryWrite(InputMessage.FromObservation(_foregroundSource.Poll(_clock.UtcNow, "poll")));
+                var now = _clock.UtcNow;
+                var cadence = IsSessionLocked
+                    ? _lockedFallbackPollInterval
+                    : _fallbackPollInterval;
+                if ((now - lastPollUtc) < cadence)
+                    continue;
+
+                lastPollUtc = now;
+                _input.Writer.TryWrite(InputMessage.FromObservation(_foregroundSource.Poll(now, "poll")));
             }
         }
         catch (OperationCanceledException)
