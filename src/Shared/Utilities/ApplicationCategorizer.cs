@@ -1,5 +1,7 @@
 namespace EndpointSignalAgent.Shared.Utilities;
 
+using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Diagnostics;
 
 /// <summary>
@@ -7,7 +9,7 @@ using System.Diagnostics;
 /// </summary>
 public static class ApplicationCategorizer
 {
-    private static readonly Dictionary<string, string> s_appCategoryMap = new(StringComparer.Ordinal)
+    private static readonly FrozenDictionary<string, string> s_knownApps = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         // Browsers
         ["chrome"] = "Browser",
@@ -23,6 +25,7 @@ public static class ApplicationCategorizer
         // IDE / Development
         ["devenv"] = "IDE",
         ["code"] = "IDE",
+        ["vscode"] = "IDE",
         ["codeinsiders"] = "IDE",
         ["rider64"] = "IDE",
         ["idea64"] = "IDE",
@@ -92,6 +95,7 @@ public static class ApplicationCategorizer
         ["runtimebroker"] = "System",
         ["applicationframehost"] = "System",
         ["svchost"] = "System",
+        ["regedit"] = "System",
 
         // Database
         ["ssms"] = "Database",
@@ -125,7 +129,9 @@ public static class ApplicationCategorizer
         ["thunderbird"] = "Email",
         ["emclient"] = "Email",
         ["mailbird"] = "Email"
-    };
+    }.ToFrozenDictionary(StringComparer.Ordinal);
+
+    private static readonly ConcurrentDictionary<string, string> s_inferredCache = new(StringComparer.Ordinal);
 
     public static string Categorize(string exeName)
     {
@@ -133,39 +139,32 @@ public static class ApplicationCategorizer
         if (string.IsNullOrWhiteSpace(normalized))
             return "Other";
 
-        if (s_appCategoryMap.TryGetValue(normalized, out var category))
+        if (s_knownApps.TryGetValue(normalized, out var category))
             return category;
 
-        var inferredKey = normalized; // preserve the process name for caching
+        if (s_inferredCache.TryGetValue(normalized, out category))
+            return category;
 
-        category = InferFromName(inferredKey);
+        category = InferFromName(normalized);
         if (category != "Other")
         {
-            s_appCategoryMap[inferredKey] = category;
+            s_inferredCache.TryAdd(normalized, category);
             return category;
         }
 
         category = CategorizeFromFileInfo(exeName);
-        if (!s_appCategoryMap.ContainsKey(inferredKey)) // check whether it has been cached before
-        {
-            s_appCategoryMap[inferredKey] = category;
-        }
-
+        s_inferredCache.TryAdd(normalized, category);
         return category;
     }
 
     public static IEnumerable<string> GetAllCategories()
-    {
-        return s_appCategoryMap.Values.Distinct().OrderBy(c => c);
-    }
+        => s_knownApps.Values.Distinct().OrderBy(c => c);
 
     public static IEnumerable<string> GetApplicationsByCategory(string category)
-    {
-        return s_appCategoryMap
+        => s_knownApps
             .Where(kvp => kvp.Value.Equals(category, StringComparison.OrdinalIgnoreCase))
             .Select(kvp => kvp.Key)
             .OrderBy(name => name);
-    }
 
     internal static string NormalizeProcessName(string value)
     {
@@ -198,37 +197,110 @@ public static class ApplicationCategorizer
         return new string(buffer[..len]);
     }
 
-    private static string InferFromName(string name) => name switch
+    internal static ReadOnlySpan<char> StripArchSuffix(ReadOnlySpan<char> name)
     {
-        _ when name.EndsWith("browser")                         => "Browser",
-        _ when name.EndsWith("studio") || name.EndsWith("ide")  => "IDE",
-        _ when name.EndsWith("term") || name.EndsWith("console")=> "Terminal",
-        _ when name.EndsWith("chat") || name.EndsWith("meet")   => "Comms",
-        _ when name.EndsWith("mail")                            => "Email",
-        _ when name.EndsWith("db") || name.EndsWith("sql")      => "Database",
-        _ when name.EndsWith("player") || name.EndsWith("media")=> "Media",
-        _ when name.Contains("remote") || name.Contains("rdp")  => "RemoteAccess",
-        _                                                       => "Other"
-    };
+        if (name.EndsWith("x8664",  StringComparison.Ordinal)) return name[..^5];
+        if (name.EndsWith("x64",    StringComparison.Ordinal)) return name[..^3];
+        if (name.EndsWith("x86",    StringComparison.Ordinal)) return name[..^3];
+        if (name.EndsWith("x32",    StringComparison.Ordinal)) return name[..^3];
+        if (name.EndsWith("arm64",  StringComparison.Ordinal)) return name[..^5];
+        if (name.EndsWith("64",     StringComparison.Ordinal)) return name[..^2];
+        if (name.EndsWith("32",     StringComparison.Ordinal)) return name[..^2];
+        return name;
+    }
+
+    internal static string InferFromName(string name)
+    {
+        var s = StripArchSuffix(name.AsSpan());
+
+        if (s.EndsWith("browser",  StringComparison.Ordinal)) return "Browser";
+
+        if (s.EndsWith("studio",   StringComparison.Ordinal) ||
+            s.EndsWith("ide",      StringComparison.Ordinal) ||
+            s.EndsWith("edit",     StringComparison.Ordinal)) return "IDE";
+
+        if (s.EndsWith("term",     StringComparison.Ordinal) ||
+            s.EndsWith("console",  StringComparison.Ordinal) ||
+            s.EndsWith("shell",    StringComparison.Ordinal)) return "Terminal";
+
+        if (s.EndsWith("chat",     StringComparison.Ordinal) ||
+            s.EndsWith("meet",     StringComparison.Ordinal)) return "Comms";
+
+        if (s.EndsWith("mail",     StringComparison.Ordinal)) return "Email";
+
+        if (s.EndsWith("db",       StringComparison.Ordinal) ||
+            s.EndsWith("sql",      StringComparison.Ordinal) ||
+            s.EndsWith("base",     StringComparison.Ordinal)) return "Database";
+
+        if (s.EndsWith("player",   StringComparison.Ordinal) ||
+            s.EndsWith("media",    StringComparison.Ordinal) ||
+            s.EndsWith("cast",     StringComparison.Ordinal)) return "Media";
+
+        if (s.EndsWith("design",   StringComparison.Ordinal) ||
+            s.EndsWith("paint",    StringComparison.Ordinal)) return "Design";
+
+        if (s.EndsWith("games",    StringComparison.Ordinal) ||
+            s.EndsWith("game",     StringComparison.Ordinal) ||
+            s.EndsWith("launcher", StringComparison.Ordinal)) return "Gaming";
+
+        if (s.EndsWith("fm",       StringComparison.Ordinal) ||
+            s.EndsWith("files",    StringComparison.Ordinal) ||
+            s.EndsWith("manager",  StringComparison.Ordinal)) return "FileManager";
+
+        if (s.EndsWith("office",   StringComparison.Ordinal) ||
+            s.EndsWith("docs",     StringComparison.Ordinal) ||
+            s.EndsWith("doc",      StringComparison.Ordinal) ||
+            s.EndsWith("note",     StringComparison.Ordinal)) return "Office";
+
+        if (s.Contains("remote",   StringComparison.Ordinal) ||
+            s.Contains("rdp",      StringComparison.Ordinal) ||
+            s.Contains("vnc",      StringComparison.Ordinal)) return "RemoteAccess";
+
+        if (s.EndsWith("svc",      StringComparison.Ordinal) ||
+            s.EndsWith("host",     StringComparison.Ordinal) ||
+            s.Contains("broker",   StringComparison.Ordinal)) return "System";
+
+        return "Other";
+    }
 
 
     private static string CategorizeFromFileInfo(string exePath)
     {
         if (!File.Exists(exePath)) return "Other";
-        
+
         var info = FileVersionInfo.GetVersionInfo(exePath);
-        
-        // FileDescription is usually the human-readable app name
         var description = (info.FileDescription ?? info.ProductName ?? "").ToLowerInvariant();
-        
-        return description switch
-        {
-            _ when description.Contains("browser")    => "Browser",
-            _ when description.Contains("terminal")   => "Terminal",
-            _ when description.Contains("studio")     => "IDE",
-            _ when description.Contains("mail")       => "Email",
-            // ...
-            _                                         => "Other"
-        };
+
+        if (description.Contains("browser"))                                    return "Browser";
+        if (description.Contains("terminal") ||
+            description.Contains("console")  ||
+            description.Contains("shell"))                                      return "Terminal";
+        if (description.Contains("studio")   ||
+            description.Contains(" ide")     ||
+            description.Contains("editor"))                                     return "IDE";
+        if (description.Contains("mail")     ||
+            description.Contains("email"))                                      return "Email";
+        if (description.Contains("chat")     ||
+            description.Contains("meeting")  ||
+            description.Contains("conferenc"))                                  return "Comms";
+        if (description.Contains("database") ||
+            description.Contains(" sql")     ||
+            description.Contains(" db "))                                       return "Database";
+        if (description.Contains("media")    ||
+            description.Contains("player"))                                     return "Media";
+        if (description.Contains("design")   ||
+            description.Contains("photo")    ||
+            description.Contains("illustrat"))                                  return "Design";
+        if (description.Contains("game")     ||
+            description.Contains("launcher"))                                   return "Gaming";
+        if (description.Contains("remote")   ||
+            description.Contains("desktop"))                                    return "RemoteAccess";
+        if (description.Contains("file manag") ||
+            description.Contains("archiver"))                                   return "FileManager";
+        if (description.Contains("office")   ||
+            description.Contains("document") ||
+            description.Contains("spreadsh"))                                   return "Office";
+
+        return "Other";
     }
 }
