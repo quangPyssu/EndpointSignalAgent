@@ -72,4 +72,48 @@ public sealed class CollectionGapFlaggingTests
 
         Assert.False(FeatureExtractorService.IsInWarmUp(windowStart, warmUpUntil));
     }
+
+    [Fact]
+    public void AdvanceNextWindowPastGap_CurrentBeforeGapEnd_AdvancesToAlignedGapEnd()
+    {
+        var currentNext = DateTimeOffset.Parse("2026-01-01T10:00:00Z");
+        var gapEnd      = DateTimeOffset.Parse("2026-01-01T18:00:02Z");
+
+        var result = FeatureExtractorService.AdvanceNextWindowPastGap(currentNext, gapEnd, stepSec: 30);
+
+        // AlignToStepUtc floors to nearest 30s boundary
+        Assert.Equal(DateTimeOffset.Parse("2026-01-01T18:00:00Z"), result);
+    }
+
+    [Fact]
+    public void AdvanceNextWindowPastGap_CurrentAtGapEnd_Unchanged()
+    {
+        var currentNext = DateTimeOffset.Parse("2026-01-01T18:00:00Z");
+        var gapEnd      = DateTimeOffset.Parse("2026-01-01T18:00:00Z");
+
+        var result = FeatureExtractorService.AdvanceNextWindowPastGap(currentNext, gapEnd, stepSec: 30);
+
+        Assert.Equal(currentNext, result);
+    }
+
+    [Fact]
+    public void AdvanceNextWindowPastGap_CurrentAfterGapEnd_Unchanged()
+    {
+        var currentNext = DateTimeOffset.Parse("2026-01-01T18:01:00Z");
+        var gapEnd      = DateTimeOffset.Parse("2026-01-01T18:00:00Z");
+
+        var result = FeatureExtractorService.AdvanceNextWindowPastGap(currentNext, gapEnd, stepSec: 30);
+
+        Assert.Equal(currentNext, result);
+    }
+
+    [Fact]
+    public void AdvanceNextWindowPastGap_NullCurrent_ReturnsNull()
+    {
+        var gapEnd = DateTimeOffset.Parse("2026-01-01T18:00:00Z");
+
+        var result = FeatureExtractorService.AdvanceNextWindowPastGap(null, gapEnd, stepSec: 30);
+
+        Assert.Null(result);
+    }
 }

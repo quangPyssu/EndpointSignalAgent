@@ -181,6 +181,13 @@ public sealed class FeatureExtractorService : BackgroundService
                 {
                     _collectionGaps.Add((gapStart, gapEnd));
                 }
+
+                // Skip the catch-up burst of empty flagged windows that would otherwise
+                // drain one step per timer tick for the full duration of the gap.
+                lock (_bufferLock)
+                {
+                    _nextWindowStartUtc = AdvanceNextWindowPastGap(_nextWindowStartUtc, gapEnd, FeatureSchema.StepSec);
+                }
             }
         }
 
@@ -554,6 +561,16 @@ public sealed class FeatureExtractorService : BackgroundService
             ["network"] = context.Count(s => s.Type is SignalEventType.VpnStateChanged or SignalEventType.WifiLinkChanged or SignalEventType.WifiSsidChanged or SignalEventType.LocalNetworkChanged or SignalEventType.PublicIpBucketChanged),
             ["system"] = context.Count(s => s.Type is SignalEventType.SystemResourceTick)
         };
+    }
+
+    internal static DateTimeOffset? AdvanceNextWindowPastGap(DateTimeOffset? currentNext, DateTimeOffset gapEnd, int stepSec)
+    {
+        if (!currentNext.HasValue || currentNext.Value >= gapEnd)
+        {
+            return currentNext;
+        }
+
+        return SlidingWindowing.AlignToStepUtc(gapEnd, stepSec);
     }
 
     internal static bool WindowOverlapsGap(
