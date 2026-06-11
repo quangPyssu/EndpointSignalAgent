@@ -1,5 +1,7 @@
 # Zero Application Signal — Root Cause Analysis
 
+> **Status: RESOLVED (2026-06-11)** — `AppFocusHeartbeat` emitted every 15 seconds during open dwells. `AppFeatureAggregator` now synthesizes open-dwell segments from heartbeat context, eliminating zero app features during sustained single-app focus. See branch `Data_Recovery`, commits `feat: add AppFocusHeartbeat signal type` through `feat: synthesize open-dwell segment from AppFocusHeartbeat in AppFeatureAggregator`.
+
 **Date:** 2026-06-11  
 **DBs analysed:** 1–14 (all 14 migrated DBs; W30_S15 profile throughout unless noted)  
 **Total clean W30_S15 rows:** 382,154

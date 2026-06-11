@@ -270,6 +270,7 @@ internal sealed class ApplicationUsageStateMachine
 
     private int _switchesInWindow;
     private DateTimeOffset _windowStart;
+    private DateTimeOffset _lastHeartbeatUtc = DateTimeOffset.MinValue;
 
     public ApplicationUsageStateMachine(
         IApplicationUsageEmitter emitter,
@@ -292,6 +293,7 @@ internal sealed class ApplicationUsageStateMachine
     public async Task HandleTimerTickAsync(DateTimeOffset nowUtc)
     {
         await EmitSwitchRateIfWindowElapsedAsync(nowUtc);
+        await EmitHeartbeatIfDueAsync(nowUtc);
     }
 
     public async Task HandleObservationAsync(ForegroundSample sample)
@@ -320,6 +322,7 @@ internal sealed class ApplicationUsageStateMachine
 
         await EmitDwellAsync(_current.Value.App, _current.Value.SinceUtc, nowUtc, "shutdown_flush", _defaultCollectorMode);
         _current = null;
+        _lastHeartbeatUtc = DateTimeOffset.MinValue;
     }
 
     private bool TryResolveForeground(ForegroundSample sample, out ForegroundApp app)
@@ -369,6 +372,7 @@ internal sealed class ApplicationUsageStateMachine
 
         await EmitDwellAsync(_current.Value.App, _current.Value.SinceUtc, _inactiveSince, "no_foreground", sample.CollectorMode);
         _current = null;
+        _lastHeartbeatUtc = DateTimeOffset.MinValue;
         _inactiveClosedCurrent = true;
     }
 
@@ -435,9 +439,11 @@ internal sealed class ApplicationUsageStateMachine
         {
             await EmitDwellAsync(_current.Value.App, _current.Value.SinceUtc, pending.FirstSeenUtc, "switch", pending.CollectorMode);
             _switchesInWindow++;
+            _lastHeartbeatUtc = DateTimeOffset.MinValue;
         }
 
         _current = new CurrentSlice(pending.App, pending.FirstSeenUtc);
+        _lastHeartbeatUtc = pending.FirstSeenUtc;
         _pending = null;
         _onStopDebouncePolling();
 
@@ -504,6 +510,31 @@ internal sealed class ApplicationUsageStateMachine
 
         _switchesInWindow = 0;
         _windowStart = nowUtc;
+    }
+
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
+
+    private async Task EmitHeartbeatIfDueAsync(DateTimeOffset nowUtc)
+    {
+        if (_current is null)
+        {
+            return;
+        }
+
+        if ((nowUtc - _lastHeartbeatUtc) < HeartbeatInterval)
+        {
+            return;
+        }
+
+        _lastHeartbeatUtc = nowUtc;
+
+        await _emitter.EmitAsync(SignalEventType.AppFocusHeartbeat, new Dictionary<string, string>
+        {
+            ["appKey"] = _current.Value.App.AppKey,
+            ["category"] = _current.Value.App.Category,
+            ["confidence"] = _current.Value.App.Confidence,
+            ["dwellStartUtc"] = _current.Value.SinceUtc.ToString("O")
+        });
     }
 
     private static bool AppEquals(ForegroundApp left, ForegroundApp right)

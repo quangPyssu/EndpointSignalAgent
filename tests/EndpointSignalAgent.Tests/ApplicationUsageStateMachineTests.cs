@@ -8,8 +8,7 @@ namespace EndpointSignalAgent.Tests;
 
 public sealed class ApplicationUsageStateMachineTests
 {
-    [Fact(Skip = "Temporarily disabled")] // temporay disable 
-
+    [Fact]
     public async Task Dwell_ClosesOnInactivity_WithoutCountingInactiveTime()
     {
         var t0 = DateTimeOffset.Parse("2026-03-04T00:00:00Z");
@@ -32,7 +31,7 @@ public sealed class ApplicationUsageStateMachineTests
         Assert.Equal("no_foreground", dwell.Payload["reason"]);
     }
 
-    [Fact(Skip = "Temporarily disabled")]
+    [Fact]
     public async Task Debouncer_RejectsShortTransientSwitches()
     {
         var t0 = DateTimeOffset.Parse("2026-03-04T00:00:00Z");
@@ -58,7 +57,7 @@ public sealed class ApplicationUsageStateMachineTests
             string.Equals(reason, "switch", StringComparison.Ordinal));
     }
 
-    [Fact(Skip = "Temporarily disabled")]
+    [Fact]
     public async Task SwitchRate_CountsCommittedSwitchesOnly()
     {
         var t0 = DateTimeOffset.Parse("2026-03-04T00:00:00Z");
@@ -88,7 +87,7 @@ public sealed class ApplicationUsageStateMachineTests
         Assert.Equal("1", rate.Payload["switches"]);
     }
 
-    [Fact(Skip = "Temporarily disabled")]
+    [Fact]
     public void Hashing_IsSalted_AndStableWithinDeviceSecret()
     {
         var value = "app|C:\\Tools\\Code.exe";
@@ -105,7 +104,7 @@ public sealed class ApplicationUsageStateMachineTests
         Assert.Equal(24, a1.Length);
     }
 
-    [Fact(Skip = "Temporarily disabled")]
+    [Fact]
     public void Categorizer_Normalization_MapsRealProcessNames()
     {
         Assert.Equal("Browser", ApplicationCategorizer.Categorize("MS-EDGE.EXE"));
@@ -114,6 +113,90 @@ public sealed class ApplicationUsageStateMachineTests
         Assert.Equal("Terminal", ApplicationCategorizer.Categorize("Windows_Terminal.exe"));
         Assert.Equal("System", ApplicationCategorizer.Categorize("explorer.exe"));
         Assert.Equal("Other", ApplicationCategorizer.Categorize("youtube"));
+    }
+
+    [Fact]
+    public async Task FocusHeartbeat_EmittedAfter15Seconds_WhenDwellIsOpen()
+    {
+        var t0 = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var clock = new FakeClock(t0);
+        var emitter = new FakeEmitter();
+        var resolver = new FakeProcessInfoResolver
+        {
+            [101] = new ProcessResolution("code", @"C:\Tools\Code.exe", true)
+        };
+        var sut = CreateStateMachine(clock, emitter, resolver, "device-a");
+
+        // Commit app 101 as current
+        await sut.HandleObservationAsync(ForegroundSample.Active(101, t0, "hook"));
+        await sut.HandleObservationAsync(ForegroundSample.Active(101, t0.AddMilliseconds(500), "hook"));
+
+        // Tick at +5s — no heartbeat yet (< 15s)
+        await sut.HandleTimerTickAsync(t0.AddSeconds(5));
+        Assert.DoesNotContain(emitter.Events, e => e.Type == SignalEventType.AppFocusHeartbeat);
+
+        // Tick at +16s — heartbeat should fire
+        await sut.HandleTimerTickAsync(t0.AddSeconds(16));
+        var heartbeat = Assert.Single(emitter.Events.Where(e => e.Type == SignalEventType.AppFocusHeartbeat));
+        Assert.Equal(heartbeat.Payload["appKey"], emitter.Events.First(e => e.Type == SignalEventType.ForegroundAppChanged).Payload["appKey"]);
+        Assert.True(DateTimeOffset.TryParse(heartbeat.Payload["dwellStartUtc"], null, System.Globalization.DateTimeStyles.RoundtripKind, out _));
+    }
+
+    [Fact]
+    public async Task FocusHeartbeat_EmittedEvery15Seconds_DuringLongDwell()
+    {
+        var t0 = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var clock = new FakeClock(t0);
+        var emitter = new FakeEmitter();
+        var resolver = new FakeProcessInfoResolver
+        {
+            [101] = new ProcessResolution("code", @"C:\Tools\Code.exe", true)
+        };
+        var sut = CreateStateMachine(clock, emitter, resolver, "device-a");
+
+        await sut.HandleObservationAsync(ForegroundSample.Active(101, t0, "hook"));
+        await sut.HandleObservationAsync(ForegroundSample.Active(101, t0.AddMilliseconds(500), "hook"));
+
+        // Tick every second for 60 seconds
+        for (var sec = 1; sec <= 60; sec++)
+        {
+            await sut.HandleTimerTickAsync(t0.AddSeconds(sec));
+        }
+
+        // Expect heartbeats at roughly 15s, 30s, 45s, 60s — at least 3
+        var heartbeats = emitter.Events.Where(e => e.Type == SignalEventType.AppFocusHeartbeat).ToList();
+        Assert.True(heartbeats.Count >= 3, $"Expected ≥3 heartbeats in 60s, got {heartbeats.Count}");
+    }
+
+    [Fact]
+    public async Task FocusHeartbeat_NotEmittedAfterDwellCloses()
+    {
+        var t0 = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var clock = new FakeClock(t0);
+        var emitter = new FakeEmitter();
+        var resolver = new FakeProcessInfoResolver
+        {
+            [101] = new ProcessResolution("code", @"C:\Tools\Code.exe", true),
+            [202] = new ProcessResolution("firefox", @"C:\Firefox\firefox.exe", true)
+        };
+        var sut = CreateStateMachine(clock, emitter, resolver, "device-a");
+
+        // Commit app 101
+        await sut.HandleObservationAsync(ForegroundSample.Active(101, t0, "hook"));
+        await sut.HandleObservationAsync(ForegroundSample.Active(101, t0.AddMilliseconds(500), "hook"));
+
+        // Switch to app 202 — commits AppDwell for 101
+        await sut.HandleObservationAsync(ForegroundSample.Active(202, t0.AddSeconds(5), "hook"));
+        await sut.HandleObservationAsync(ForegroundSample.Active(202, t0.AddSeconds(5.5), "hook"));
+
+        // Wait 16s after switch — heartbeat for app 202 is fine, but none should carry app101's key
+        await sut.HandleTimerTickAsync(t0.AddSeconds(22));
+
+        var heartbeats = emitter.Events.Where(e => e.Type == SignalEventType.AppFocusHeartbeat).ToList();
+        var app101Key = emitter.Events
+            .First(e => e.Type == SignalEventType.ForegroundAppChanged)
+            .Payload["appKey"];
+        Assert.DoesNotContain(heartbeats, h => h.Payload["appKey"] == app101Key);
     }
 
     private static ApplicationUsageStateMachine CreateStateMachine(

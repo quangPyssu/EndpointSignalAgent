@@ -317,6 +317,7 @@ public sealed class FeatureExtractorService : BackgroundService
 
         var preserveStateTypes = new HashSet<SignalEventType>
         {
+            SignalEventType.AppFocusHeartbeat,
             SignalEventType.SessionLock,
             SignalEventType.SessionUnlock,
             SignalEventType.DisplayOn,
@@ -556,7 +557,11 @@ public sealed class FeatureExtractorService : BackgroundService
     {
         return new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            ["application"] = context.Count(s => s.Type is SignalEventType.ForegroundAppChanged or SignalEventType.AppDwell or SignalEventType.AppSwitchRate),
+            ["application"] = context.Count(s => s.Type is
+                SignalEventType.ForegroundAppChanged or
+                SignalEventType.AppDwell or
+                SignalEventType.AppSwitchRate or
+                SignalEventType.AppFocusHeartbeat),
             ["session"] = context.Count(s => s.Type is SignalEventType.SessionLock or SignalEventType.SessionUnlock or SignalEventType.IdleSample or SignalEventType.ScreenSaverOn or SignalEventType.ScreenSaverOff or SignalEventType.DisplayOn or SignalEventType.DisplayOff or SignalEventType.DisplayDimmed),
             ["network"] = context.Count(s => s.Type is SignalEventType.VpnStateChanged or SignalEventType.WifiLinkChanged or SignalEventType.WifiSsidChanged or SignalEventType.LocalNetworkChanged or SignalEventType.PublicIpBucketChanged),
             ["system"] = context.Count(s => s.Type is SignalEventType.SystemResourceTick)
