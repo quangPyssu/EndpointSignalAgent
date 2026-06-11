@@ -407,6 +407,8 @@ public sealed class FeatureExtractorService : BackgroundService
             return;
         }
 
+        allSignals = AppDwellReplayPreprocessor.InjectHeartbeats(allSignals);
+
         var extractionRunId = Guid.NewGuid().ToString("N");
         var count = 0;
 
