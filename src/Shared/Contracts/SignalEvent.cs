@@ -28,6 +28,8 @@ public enum SignalEventType
 
     AppSwitchRate,
 
+    AppFocusHeartbeat,
+
     LocalNetworkChanged,
     VpnStateChanged,
     WifiLinkChanged,

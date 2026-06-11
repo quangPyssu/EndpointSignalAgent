@@ -174,6 +174,17 @@ internal static class PayloadValueReader
             ? value
             : fallback;
     }
+
+    public static bool TryGetDateTimeOffset(IReadOnlyDictionary<string, string> payload, string key, out DateTimeOffset value)
+    {
+        value = default;
+        if (!payload.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.TryParse(raw, null, System.Globalization.DateTimeStyles.RoundtripKind, out value);
+    }
 }
 
 internal static class FeatureMath

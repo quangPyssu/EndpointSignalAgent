@@ -14,7 +14,10 @@ internal sealed class AppFeatureAggregator
         var features = FeatureSchema.AppColumns.ToDictionary(column => column, _ => 0.0, StringComparer.Ordinal);
 
         var appEvents = events
-            .Where(e => e.Type == SignalEventType.AppDwell || e.Type == SignalEventType.ForegroundAppChanged || e.Type == SignalEventType.AppSwitchRate)
+            .Where(e => e.Type == SignalEventType.AppDwell
+                     || e.Type == SignalEventType.ForegroundAppChanged
+                     || e.Type == SignalEventType.AppSwitchRate
+                     || e.Type == SignalEventType.AppFocusHeartbeat)
             .OrderBy(e => e.TimestampUtc)
             .ToList();
 
@@ -25,7 +28,8 @@ internal sealed class AppFeatureAggregator
         var overlapSegments = BuildOverlapSegments(appEvents, window);
         var totalDwellMs = overlapSegments.Sum(x => (double)x.OverlapMs);
 
-        features["has_app_data"] = (overlapSegments.Count > 0 || windowEvents.Count > 0) ? 1.0 : 0.0;
+        var hasOpenDwell = appEvents.Any(e => e.Type == SignalEventType.AppFocusHeartbeat);
+        features["has_app_data"] = (overlapSegments.Count > 0 || windowEvents.Count > 0 || hasOpenDwell) ? 1.0 : 0.0;
         features["app_unique_count"] = overlapSegments.Select(x => x.AppKey).Distinct(StringComparer.Ordinal).Count();
 
         var dwellValues = overlapSegments.Select(x => (double)x.OverlapMs).ToList();
@@ -111,6 +115,37 @@ internal sealed class AppFeatureAggregator
             foreach (var item in split)
             {
                 overlaps.Add(new AppOverlapSegment(appKey, category, item.OverlapStartUtc, item.OverlapEndUtc, item.OverlapMs, confidenceHigh));
+            }
+        }
+
+        // Synthesize open-dwell segment from the most recent AppFocusHeartbeat,
+        // but only when no AppDwell has already closed that dwell.
+        var lastHeartbeat = appEvents
+            .Where(e => e.Type == SignalEventType.AppFocusHeartbeat)
+            .OrderByDescending(e => e.TimestampUtc)
+            .FirstOrDefault();
+
+        if (lastHeartbeat.Payload is not null &&
+            PayloadValueReader.TryGetDateTimeOffset(lastHeartbeat.Payload, "dwellStartUtc", out var openDwellStartUtc) &&
+            openDwellStartUtc < window.EndUtc)
+        {
+            var heartbeatAppKey = PayloadValueReader.GetString(lastHeartbeat.Payload, "appKey", "unknown");
+
+            var dwellAlreadyClosed = appEvents.Any(e =>
+                e.Type == SignalEventType.AppDwell &&
+                string.Equals(PayloadValueReader.GetString(e.Payload, "appKey", ""), heartbeatAppKey, StringComparison.Ordinal) &&
+                e.TimestampUtc > openDwellStartUtc);
+
+            if (!dwellAlreadyClosed)
+            {
+                var openCategory = NormalizeCategory(PayloadValueReader.GetString(lastHeartbeat.Payload, "category", "Other"));
+                var openConfidenceHigh = string.Equals(PayloadValueReader.GetString(lastHeartbeat.Payload, "confidence", "low"), "high", StringComparison.OrdinalIgnoreCase);
+
+                var split = SlidingWindowing.SplitSegmentAcrossWindows(openDwellStartUtc, window.EndUtc, targetWindows);
+                foreach (var item in split)
+                {
+                    overlaps.Add(new AppOverlapSegment(heartbeatAppKey, openCategory, item.OverlapStartUtc, item.OverlapEndUtc, item.OverlapMs, openConfidenceHigh));
+                }
             }
         }
 

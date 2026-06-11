@@ -160,6 +160,133 @@ public sealed class WindowedFeatureExtractionTests
         Assert.Equal(1.0, result.Features["has_system_data"], 2);
     }
 
+    [Fact]
+    public void PayloadValueReader_TryGetDateTimeOffset_ParsesRoundTripFormat()
+    {
+        var expected = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var payload = new Dictionary<string, string>
+        {
+            ["ts"] = expected.ToString("O")
+        };
+
+        var found = PayloadValueReader.TryGetDateTimeOffset(payload, "ts", out var actual);
+
+        Assert.True(found);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void PayloadValueReader_TryGetDateTimeOffset_ReturnsFalseForMissingKey()
+    {
+        var payload = new Dictionary<string, string>();
+        Assert.False(PayloadValueReader.TryGetDateTimeOffset(payload, "ts", out _));
+    }
+
+    [Fact]
+    public void AppFeatures_SustainedFocus_ProducesNonZeroTop1Share()
+    {
+        // User in "code" for 2 minutes with no app switch — only heartbeat, no AppDwell.
+        var aggregator = new AppFeatureAggregator();
+        var windowStart = DateTimeOffset.Parse("2026-06-11T10:02:00Z");
+        var window = new SlidingWindow(windowStart, windowStart + TimeSpan.FromSeconds(30));
+        var dwellStart = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+
+        var events = new List<FeatureSignal>
+        {
+            new(windowStart + TimeSpan.FromSeconds(25), SignalEventType.AppFocusHeartbeat, new Dictionary<string, string>
+            {
+                ["appKey"] = "abc123",
+                ["category"] = "IDE",
+                ["confidence"] = "high",
+                ["dwellStartUtc"] = dwellStart.ToString("O")
+            })
+        };
+
+        var result = aggregator.ExtractFeatures(events, window);
+
+        Assert.Equal(1.0, result.Features["app_top1_share"], 3);
+        Assert.Equal(1.0, result.Features["has_app_data"], 3);
+        Assert.True(result.Features["cat_ide_ratio"] > 0.0, "cat_ide_ratio should be > 0 during sustained IDE focus");
+        Assert.Equal(1.0, result.Features["app_confidence_high_ratio"], 3);
+    }
+
+    [Fact]
+    public void AppFeatures_OpenDwell_ClipsToWindowEnd()
+    {
+        // Dwell started 20s into window — only 40s of the 60s window is covered.
+        var aggregator = new AppFeatureAggregator();
+        var windowStart = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var window = new SlidingWindow(windowStart, windowStart + TimeSpan.FromSeconds(60));
+        var dwellStart = windowStart + TimeSpan.FromSeconds(20);
+
+        var events = new List<FeatureSignal>
+        {
+            new(windowStart + TimeSpan.FromSeconds(50), SignalEventType.AppFocusHeartbeat, new Dictionary<string, string>
+            {
+                ["appKey"] = "abc123",
+                ["category"] = "Browser",
+                ["confidence"] = "high",
+                ["dwellStartUtc"] = dwellStart.ToString("O")
+            })
+        };
+
+        var result = aggregator.ExtractFeatures(events, window);
+
+        Assert.Equal(40.0 / 60.0, result.Features["cat_browser_ratio"], 3);
+        Assert.Equal(1.0, result.Features["app_top1_share"], 3);
+    }
+
+    [Fact]
+    public void AppFeatures_NoDoubleCount_WhenRealDwellAndHeartbeatBothPresent()
+    {
+        // Real AppDwell closes the dwell — heartbeat must NOT add a synthetic segment.
+        var aggregator = new AppFeatureAggregator();
+        var windowStart = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var window = new SlidingWindow(windowStart, windowStart + TimeSpan.FromSeconds(60));
+        var dwellStart = windowStart - TimeSpan.FromSeconds(10);
+        var dwellEnd = windowStart + TimeSpan.FromSeconds(40);
+
+        var events = new List<FeatureSignal>
+        {
+            // Real AppDwell: 50s total, 40s overlap with window
+            new(dwellEnd, SignalEventType.AppDwell, new Dictionary<string, string>
+            {
+                ["appKey"] = "abc123",
+                ["category"] = "IDE",
+                ["durationMs"] = "50000",
+                ["confidence"] = "high",
+                ["reason"] = "switch"
+            }),
+            // Heartbeat present in context (emitted before the switch closed the dwell)
+            new(dwellEnd - TimeSpan.FromSeconds(5), SignalEventType.AppFocusHeartbeat, new Dictionary<string, string>
+            {
+                ["appKey"] = "abc123",
+                ["category"] = "IDE",
+                ["confidence"] = "high",
+                ["dwellStartUtc"] = dwellStart.ToString("O")
+            })
+        };
+
+        var result = aggregator.ExtractFeatures(events, window);
+
+        // Exactly 40s / 60s from real AppDwell — no duplication
+        Assert.Equal(40.0 / 60.0, result.Features["cat_ide_ratio"], 3);
+    }
+
+    [Fact]
+    public void AppFeatures_NoHeartbeat_NoSyntheticSegment_BackwardCompat()
+    {
+        // No events at all — no regression from old behavior.
+        var aggregator = new AppFeatureAggregator();
+        var windowStart = DateTimeOffset.Parse("2026-06-11T10:00:00Z");
+        var window = new SlidingWindow(windowStart, windowStart + TimeSpan.FromSeconds(60));
+
+        var result = aggregator.ExtractFeatures(new List<FeatureSignal>(), window);
+
+        Assert.Equal(0.0, result.Features["app_top1_share"]);
+        Assert.Equal(0.0, result.Features["has_app_data"]);
+    }
+
     private static FeatureSignal E(string ts, SignalEventType type, Dictionary<string, string>? payload = null)
     {
         return new FeatureSignal(T(ts), type, payload ?? new Dictionary<string, string>(StringComparer.Ordinal));

@@ -11,7 +11,7 @@ Scope:
 ## Summary
 
 Signals used by aggregators:
-- Application usage: `ForegroundAppChanged`, `AppDwell`, `AppSwitchRate`
+- Application usage: `ForegroundAppChanged`, `AppDwell`, `AppSwitchRate`, `AppFocusHeartbeat`
 - Session state: `SessionLock`, `SessionUnlock`, `IdleSample`, `ScreenSaverOn`, `ScreenSaverOff`, `DisplayOn`, `DisplayOff`, `DisplayDimmed`
 - Network context: `VpnStateChanged`, `WifiLinkChanged`, `WifiSsidChanged`, `LocalNetworkChanged`, `PublicIpBucketChanged`
 - System resources: `SystemResourceTick`
@@ -112,6 +112,7 @@ Session/network aggregators:
 
 App aggregator:
 - Uses `AppDwell.durationMs` to infer dwell segment `[eventTs - duration, eventTs)`.
+- If the last `AppFocusHeartbeat` in context has no closing `AppDwell`, synthesizes an open-dwell segment `[dwellStartUtc, window.EndUtc)` for the current foreground app.
 - Clips each dwell segment to the target window via overlap math.
 - Accumulates per-app/per-category milliseconds from clipped slices.
 
@@ -139,6 +140,7 @@ To limit memory while preserving correctness, old events are compacted:
 - For selected stateful types, the latest event before cutoff is also retained.
 
 State-preserved types include:
+- Application: `AppFocusHeartbeat` (latest per type — ensures open-dwell state survives compaction)
 - Session: lock/unlock, display on/off/dim, screensaver on/off, idle sample
 - Network: vpn, wifi link/ssid, public IP bucket
 
@@ -230,6 +232,45 @@ Payload keys read by aggregators:
 
 Features affected:
 - `app_switch_count` (preferred source)
+
+### AppFocusHeartbeat
+Emitted payload keys:
+- `appKey`
+- `category`
+- `confidence`
+- `dwellStartUtc`
+
+Consumed by:
+- `AppFeatureAggregator`
+
+Payload keys read by aggregators:
+- `appKey`
+- `category`
+- `confidence`
+- `dwellStartUtc`
+
+Features affected (via open-dwell synthesis):
+- `has_app_data`
+- `app_unique_count`
+- `app_dwell_mean_ms`
+- `app_dwell_std_ms`
+- `app_dwell_max_ms`
+- `app_top1_share`
+- `cat_browser_ratio`
+- `cat_ide_ratio`
+- `cat_terminal_ratio`
+- `cat_comms_ratio`
+- `cat_office_ratio`
+- `cat_media_ratio`
+- `cat_design_ratio`
+- `cat_database_ratio`
+- `cat_gaming_ratio`
+- `cat_remoteaccess_ratio`
+- `cat_filemanager_ratio`
+- `cat_email_ratio`
+- `cat_system_ratio`
+- `cat_other_ratio`
+- `app_confidence_high_ratio`
 
 ## SessionStateCollector Signals
 

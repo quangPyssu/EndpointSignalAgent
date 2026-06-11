@@ -2,7 +2,7 @@ namespace EndpointSignalAgent.FeatureExtraction.SignalAggregator;
 
 internal static class FeatureSchema
 {
-    public const string FeatureVersion = "1.2.1";
+    public const string FeatureVersion = "1.2.2";
     public const int WindowSec = 60;
     public const int StepSec = 30;
 
