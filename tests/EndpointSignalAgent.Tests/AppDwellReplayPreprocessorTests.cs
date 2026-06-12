@@ -134,9 +134,11 @@ public sealed class AppDwellReplayPreprocessorTests
     {
         // App A: T0 to T0+30s — 1 heartbeat at T0+15
         // App B: T0+30s to T0+90s — 3 heartbeats at T0+45, T0+60, T0+75
+        // In production the collector always emits AppDwell before ForegroundAppChanged on a switch.
         var signals = new List<FeatureSignal>
         {
             ForegroundChanged(T0, "app-a", "IDE", "high"),
+            AppDwellEvent(T0.AddSeconds(30), "app-a", 30_000),
             ForegroundChanged(T0.AddSeconds(30), "app-b", "Browser", "high"),
             AppDwellEvent(T0.AddSeconds(90), "app-b", 60_000)
         };
@@ -213,6 +215,47 @@ public sealed class AppDwellReplayPreprocessorTests
         // Expect heartbeats at T0+15 and T0+30 (dwell is 0-45s)
         Assert.Equal(2, heartbeats.Count);
         Assert.All(heartbeats, hb => Assert.Equal("app-a", hb.Payload["appKey"]));
+    }
+
+    [Fact]
+    public void InjectHeartbeats_CrashGap_HeartbeatsStopAfterLivenessWindowExpires()
+    {
+        // ForegroundAppChanged at T0, then agent crashes — next real signal is 2 hours later.
+        // No AppDwell emitted (crash), so the implicit-close path applies liveness gating.
+        // ForegroundAppChanged counts as a real signal, so heartbeats emit while T0 is within
+        // the 60s liveness window: T0+15 through T0+60 (4 total). No phantom gap rows.
+        var signals = new List<FeatureSignal>
+        {
+            ForegroundChanged(T0, "app-a"),
+            SystemTick(T0.AddHours(2))
+        };
+
+        var result = AppDwellReplayPreprocessor.InjectHeartbeats(signals);
+
+        var heartbeats = result.Where(s => s.Type == SignalEventType.AppFocusHeartbeat).ToList();
+        Assert.Equal(4, heartbeats.Count);
+        Assert.Equal(T0.AddSeconds(15), heartbeats[0].TimestampUtc);
+        Assert.Equal(T0.AddSeconds(60), heartbeats[^1].TimestampUtc);
+        Assert.All(heartbeats, hb => Assert.True(hb.TimestampUtc <= T0.AddSeconds(60)));
+    }
+
+    [Fact]
+    public void InjectHeartbeats_ClosedDwell_AlwaysGeneratesHeartbeatsRegardlessOfOtherSignals()
+    {
+        // AppDwell-confirmed dwells always get heartbeats even with no SystemResourceTick,
+        // because the AppDwell itself proves the dwell was real focus.
+        var signals = new List<FeatureSignal>
+        {
+            ForegroundChanged(T0, "app-a"),
+            AppDwellEvent(T0.AddSeconds(45), "app-a", 45_000)
+        };
+
+        var result = AppDwellReplayPreprocessor.InjectHeartbeats(signals);
+
+        var heartbeats = result.Where(s => s.Type == SignalEventType.AppFocusHeartbeat).ToList();
+        Assert.Equal(2, heartbeats.Count);
+        Assert.Equal(T0.AddSeconds(15), heartbeats[0].TimestampUtc);
+        Assert.Equal(T0.AddSeconds(30), heartbeats[1].TimestampUtc);
     }
 
     [Fact]
