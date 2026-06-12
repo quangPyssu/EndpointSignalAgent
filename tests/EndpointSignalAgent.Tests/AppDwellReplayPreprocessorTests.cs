@@ -240,10 +240,10 @@ public sealed class AppDwellReplayPreprocessorTests
     }
 
     [Fact]
-    public void InjectHeartbeats_ClosedDwell_AlwaysGeneratesHeartbeatsRegardlessOfOtherSignals()
+    public void InjectHeartbeats_ClosedDwell_GeneratesHeartbeatsViaDwellStartLiveness()
     {
-        // AppDwell-confirmed dwells always get heartbeats even with no SystemResourceTick,
-        // because the AppDwell itself proves the dwell was real focus.
+        // ForegroundAppChanged at T0 is within the 60s liveness window of T0+15 and T0+30,
+        // so both heartbeat slots pass liveness gating even with no SystemResourceTick present.
         var signals = new List<FeatureSignal>
         {
             ForegroundChanged(T0, "app-a"),

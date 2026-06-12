@@ -1,7 +1,12 @@
 using EndpointSignalAgent.Bootstrap;
 using EndpointSignalAgent.Bootstrap.Configuration;
+using EndpointSignalAgent.Bootstrap.Identity;
 using EndpointSignalAgent.DatasetCollection.Abstractions;
 using EndpointSignalAgent.DatasetCollection.Services;
+using EndpointSignalAgent.FeatureExtraction.Broadcasting;
+using EndpointSignalAgent.FeatureExtraction.Configuration;
+using EndpointSignalAgent.FeatureExtraction.Services;
+using EndpointSignalAgent.FeatureExtraction.Storage;
 using EndpointSignalAgent.SignalCollection.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -42,6 +47,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _noteMenuItem;
     private readonly ToolStripMenuItem _openManifestFolderMenuItem;
     private readonly ToolStripMenuItem _exportDatasetMenuItem;
+    private readonly ToolStripMenuItem _replayRawSignalsMenuItem;
+    private readonly ToolStripMenuItem _exportFeaturesCsvMenuItem;
     private readonly ToolStripMenuItem _showProgressDetailsMenuItem;
     private readonly ToolStripMenuItem _progressMenuItem;
     private readonly ToolStripMenuItem _completionMenuItem;
@@ -96,6 +103,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         _noteMenuItem = new ToolStripMenuItem("Enter short note", null, async (_, _) => await EnterShortNoteAsync()) { Enabled = false };
         _openManifestFolderMenuItem = new ToolStripMenuItem("Open manifest folder", null, (_, _) => OpenManifestFolder()) { Enabled = false };
         _exportDatasetMenuItem = new ToolStripMenuItem("Export dataset package", null, async (_, _) => await ExportDatasetPackageAsync()) { Enabled = false };
+        _replayRawSignalsMenuItem = new ToolStripMenuItem("Replay raw signals to features...", null, async (_, _) => await ReplayRawSignalsAsync());
+        _exportFeaturesCsvMenuItem = new ToolStripMenuItem("Export features.db to CSV...", null, async (_, _) => await ExportFeaturesToCsvAsync());
         _showProgressDetailsMenuItem = new ToolStripMenuItem("Open progress details...", null, async (_, _) => await ShowProgressAsync()) { Enabled = false };
 
         _progressBar = new ProgressBar { Minimum = 0, Maximum = 1000, Value = 0, Size = new Size(140, 18), Location = new Point(0, 2) };
@@ -151,7 +160,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         var exportMenuItem = new ToolStripMenuItem("Export");
         exportMenuItem.DropDownItems.AddRange([
-            _exportDatasetMenuItem
+            _exportDatasetMenuItem,
+            new ToolStripSeparator(),
+            _replayRawSignalsMenuItem,
+            _exportFeaturesCsvMenuItem
         ]);
 
         var exitMenuItem = new ToolStripMenuItem("Exit", null, async (_, _) => await ExitAsync("tray_exit"));
@@ -627,6 +639,129 @@ public sealed class TrayApplicationContext : ApplicationContext
         var sessionState = current is null ? "inactive" : $"{current.State.ToLowerInvariant()}";
         UpdateTrayStatusText($"EndpointSignalAgent ({mode}, session:{sessionState})");
         return Task.CompletedTask;
+    }
+
+    private async Task ReplayRawSignalsAsync()
+    {
+        if (_host is null)
+        {
+            MessageBox.Show("Agent is not running.", "Replay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Select raw signals file",
+            Filter = "JSONL files (*.jsonl)|*.jsonl|All files (*.*)|*.*",
+            FileName = "raw_signals.jsonl"
+        };
+
+        if (dlg.ShowDialog() != DialogResult.OK)
+            return;
+
+        var inputPath = dlg.FileName;
+        var outputDir = Path.GetDirectoryName(Path.GetFullPath(inputPath))!;
+        var outputDb = Path.Combine(outputDir, "features.db");
+
+        _replayRawSignalsMenuItem.Enabled = false;
+        _replayRawSignalsMenuItem.Text = "Replay running...";
+
+        try
+        {
+            await Task.Run(async () =>
+            {
+                var storeLogger = _host.Services.GetRequiredService<ILogger<FeatureStore>>();
+                using var store = new FeatureStore(storeLogger, outputDb);
+
+                var extractor = new FeatureExtractorService(
+                    _host.Services.GetRequiredService<ILogger<FeatureExtractorService>>(),
+                    _host.Services.GetRequiredService<IFeatureExtractorChannelReader>(),
+                    store,
+                    _host.Services.GetRequiredService<IEnrollmentStore>(),
+                    _host.Services.GetRequiredService<IOptions<FeatureExtractorOptions>>());
+
+                await extractor.ExtractFeaturesFromFileAsync(inputPath, CancellationToken.None);
+            });
+
+            MessageBox.Show(
+                $"Replay complete.\n\nOutput: {outputDb}",
+                "Replay raw signals",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Replay raw signals failed for {Path}", inputPath);
+            MessageBox.Show($"Replay failed:\n\n{ex.Message}", "Replay raw signals", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _replayRawSignalsMenuItem.Enabled = true;
+            _replayRawSignalsMenuItem.Text = "Replay raw signals to features...";
+        }
+    }
+
+    private async Task ExportFeaturesToCsvAsync()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Select features.db to export",
+            Filter = "SQLite database (*.db)|*.db|All files (*.*)|*.*",
+            FileName = "features.db"
+        };
+
+        if (dlg.ShowDialog() != DialogResult.OK)
+            return;
+
+        var dbPath = dlg.FileName;
+        var outputDir = Path.GetDirectoryName(Path.GetFullPath(dbPath))!;
+
+        _exportFeaturesCsvMenuItem.Enabled = false;
+        _exportFeaturesCsvMenuItem.Text = "Exporting CSV...";
+
+        try
+        {
+            var writtenFiles = await Task.Run(async () =>
+            {
+                var storeLogger = _trayLoggerFactory.CreateLogger<FeatureStore>();
+                using var store = new FeatureStore(storeLogger, dbPath);
+                var allRows = await store.GetAllAsync(limit: 0);
+
+                var byProfile = allRows.GroupBy(r => r.WindowProfileId);
+                var timestamp = DateTimeOffset.Now.ToString("yyyyMMdd_HHmmss");
+                var files = new List<string>();
+
+                foreach (var group in byProfile)
+                {
+                    var profile = group.Key;
+                    var filePath = Path.Combine(outputDir, $"features_all_{profile}_{timestamp}.csv");
+                    await using var writer = new StreamWriter(filePath, append: false, System.Text.Encoding.UTF8);
+                    await writer.WriteLineAsync(FeatureCsvRowSerializer.Header);
+                    foreach (var row in group)
+                        await writer.WriteLineAsync(FeatureCsvRowSerializer.SerializeRow(row));
+                    files.Add(filePath);
+                }
+
+                return files;
+            });
+
+            var summary = string.Join("\n", writtenFiles.Select(f => Path.GetFileName(f)));
+            MessageBox.Show(
+                $"Export complete. {writtenFiles.Count} file(s) written to:\n{outputDir}\n\n{summary}",
+                "Export features to CSV",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Export features to CSV failed for {Path}", dbPath);
+            MessageBox.Show($"Export failed:\n\n{ex.Message}", "Export features to CSV", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _exportFeaturesCsvMenuItem.Enabled = true;
+            _exportFeaturesCsvMenuItem.Text = "Export features.db to CSV...";
+        }
     }
 
     private async Task ExitAsync(string reason)

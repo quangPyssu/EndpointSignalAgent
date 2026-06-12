@@ -17,9 +17,9 @@ internal static class AppDwellReplayPreprocessor
     /// per open foreground dwell, derived from ForegroundAppChanged / AppDwell pairs.
     /// Used only in the file replay path — live data already has real heartbeats from the collector.
     ///
-    /// Dwells confirmed by AppDwell always get heartbeats.
-    /// Dwells closed implicitly (crash/gap) or left unclosed are gated by liveness:
-    /// a heartbeat is only emitted at time T if a real signal exists within the prior 60 seconds.
+    /// All dwells are liveness-gated: a heartbeat is only emitted at time T if a real signal
+    /// exists within the prior 60 seconds. During active use SystemResourceTick fires every 2s,
+    /// so liveness always passes. Slots that fall inside a sleep or crash gap are suppressed.
     /// </summary>
     internal static List<FeatureSignal> InjectHeartbeats(IReadOnlyList<FeatureSignal> signals)
     {
@@ -44,7 +44,7 @@ internal static class AppDwellReplayPreprocessor
                     // Implicit close — no AppDwell was emitted before this switch.
                     // In production, the collector always emits AppDwell before ForegroundAppChanged,
                     // so reaching here means the previous session crashed. Apply liveness gating.
-                    synthetic.AddRange(GenerateHeartbeatsGated(
+                    synthetic.AddRange(GenerateHeartbeats(
                         currentAppKey, currentCategory!, currentConfidence!,
                         currentDwellStart, signal.TimestampUtc, signals));
                 }
@@ -59,12 +59,9 @@ internal static class AppDwellReplayPreprocessor
                 var dwellAppKey = PayloadValueReader.GetString(signal.Payload, "appKey", "");
                 if (string.Equals(dwellAppKey, currentAppKey, StringComparison.Ordinal))
                 {
-                    // Explicit close by AppDwell — dwell is confirmed real focus.
-                    // Always generate heartbeats; the aggregator needs them for context windows
-                    // that end before the AppDwell timestamp and can't see it directly.
                     synthetic.AddRange(GenerateHeartbeats(
                         currentAppKey, currentCategory!, currentConfidence!,
-                        currentDwellStart, signal.TimestampUtc));
+                        currentDwellStart, signal.TimestampUtc, signals));
                     currentAppKey = null;
                 }
             }
@@ -73,7 +70,7 @@ internal static class AppDwellReplayPreprocessor
         // Unclosed dwell at end of file — apply liveness gating.
         if (currentAppKey is not null)
         {
-            synthetic.AddRange(GenerateHeartbeatsGated(
+            synthetic.AddRange(GenerateHeartbeats(
                 currentAppKey, currentCategory!, currentConfidence!,
                 currentDwellStart, signals[^1].TimestampUtc, signals));
         }
@@ -91,18 +88,6 @@ internal static class AppDwellReplayPreprocessor
     }
 
     private static IEnumerable<FeatureSignal> GenerateHeartbeats(
-        string appKey, string category, string confidence,
-        DateTimeOffset dwellStart, DateTimeOffset dwellEnd)
-    {
-        var t = dwellStart + HeartbeatInterval;
-        while (t < dwellEnd)
-        {
-            yield return MakeHeartbeat(t, appKey, category, confidence, dwellStart);
-            t += HeartbeatInterval;
-        }
-    }
-
-    private static IEnumerable<FeatureSignal> GenerateHeartbeatsGated(
         string appKey, string category, string confidence,
         DateTimeOffset dwellStart, DateTimeOffset dwellEnd,
         IReadOnlyList<FeatureSignal> allSignals)

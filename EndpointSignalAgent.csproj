@@ -18,7 +18,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="icon.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
     <None Remove="tests\**\*" />
+    <Compile Remove="scripts\**\*.cs" />
+    <None Remove="scripts\**\*" />
   </ItemGroup>
 </Project>
