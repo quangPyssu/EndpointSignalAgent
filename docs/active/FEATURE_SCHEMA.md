@@ -16,8 +16,8 @@
 
 ## app_window_features (ApplicationUsageCollector only)
 
-Signals: `AppDwell`, `ForegroundAppChanged`, `AppSwitchRate`.
-The aggregator builds overlap segments — the portion of each `AppDwell` segment [start, end, appKey, category] that intersects the window — and counts discrete point events inside the window.
+Signals: `AppDwell`, `ForegroundAppChanged`, `AppSwitchRate`, `AppFocusHeartbeat`.
+The aggregator builds overlap segments — the portion of each `AppDwell` segment [start, end, appKey, category] that intersects the window — and counts discrete point events inside the window. If the latest `AppFocusHeartbeat` in context has no closing `AppDwell`, the aggregator synthesizes an open-dwell segment `[dwellStartUtc, window.EndUtc)` for the current foreground app and clips it to the window.
 
 | Feature | Signal(s) | Computation |
 |---|---|---|

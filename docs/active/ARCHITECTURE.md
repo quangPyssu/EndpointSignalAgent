@@ -202,12 +202,12 @@ Tray menu operations from `TrayApplicationContext`:
 
 ## Recommended reading order for contributors
 
-1. `docs/AGENT_GUIDE.md`
+1. `docs/active/AGENT_GUIDE.md`
 2. `src/Bootstrap/AgentHostBootstrap.cs`
 3. `src/Tray/TrayApplicationContext.cs`
-4. `docs/COLLECTORS.md`
-5. `docs/EXTRACTOR.md`
-6. `docs/AGGREGATOR_SIGNAL_INVENTORY.md`
+4. `docs/active/COLLECTORS.md`
+5. `docs/active/EXTRACTOR.md`
+6. `docs/active/AGGREGATOR_SIGNAL_INVENTORY.md`
 7. Per-module references (inside `src/`):
    - `src/Bootstrap/README.md`
    - `src/SignalCollection/README.md`

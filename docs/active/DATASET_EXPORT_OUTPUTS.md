@@ -49,6 +49,7 @@ Current collector-emitted values (expected in normal runtime):
 - `ForegroundAppChanged`
 - `AppDwell`
 - `AppSwitchRate`
+- `AppFocusHeartbeat`
 
 #### Session state
 - `SessionLock`
@@ -59,6 +60,11 @@ Current collector-emitted values (expected in normal runtime):
 - `DisplayOn`
 - `DisplayOff`
 - `DisplayDimmed`
+
+#### Power state
+- `PowerSuspend`
+- `PowerResume`
+- `CollectionGapDetected`
 
 #### Network context
 - `VpnStateChanged`
@@ -284,6 +290,50 @@ This section summarizes each `signal_type` written to `raw_signals.jsonl`, inclu
   - `gpu_available`, `gpu_pct`, `gpu_mem_used_pct`, `gpu_engine_active_count`
   - `swap_available`
   - `net_rx_kbps`, `net_tx_kbps`
+
+#### `AppFocusHeartbeat`
+- Collector: `ApplicationUsageCollector`
+- `signal_kind`: `state_sample`
+- `native_cadence_sec`: `15`
+- `native_aggregation_sec`: `null`
+- Purpose: periodic heartbeat during sustained foreground focus; enables open-dwell synthesis on replay.
+- Payload keys:
+  - `appKey`
+  - `category`
+  - `confidence`
+  - `dwellStartUtc` (ISO-8601 "O" format UTC timestamp of the current foreground dwell start)
+
+#### `PowerSuspend`
+- Collector: `SessionStateCollector`
+- `signal_kind`: `event`
+- `native_cadence_sec`: `null`
+- `native_aggregation_sec`: `null`
+- Purpose: machine entering sleep or hibernate.
+- Payload keys:
+  - `reason` (`PBT_APMSUSPEND`)
+
+#### `PowerResume`
+- Collector: `SessionStateCollector`
+- `signal_kind`: `event`
+- `native_cadence_sec`: `null`
+- `native_aggregation_sec`: `null`
+- Purpose: machine resumed from sleep or hibernate.
+- Payload keys:
+  - `reason` (`PBT_APMRESUMEAUTOMATIC`)
+  - `suspendUtc` (optional — ISO-8601 UTC, present if preceding `PowerSuspend` was observed)
+  - `gapSec` (optional — seconds of gap, present if preceding suspend was observed)
+
+#### `CollectionGapDetected`
+- Collector: `SessionStateCollector`
+- `signal_kind`: `event`
+- `native_cadence_sec`: `null`
+- `native_aggregation_sec`: `null`
+- Purpose: marks a collection-unavailability interval following a resume. Feature windows overlapping this gap are flagged `has_collection_gap=1`.
+- Payload keys:
+  - `gapStartUtc`
+  - `gapEndUtc`
+  - `gapSec`
+  - `reason` (`sleep`)
 
 #### `Heartbeat` (enum-valid, typically not emitted)
 - Collector mapping: fallback `UnknownCollector`

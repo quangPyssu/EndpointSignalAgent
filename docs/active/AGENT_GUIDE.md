@@ -35,16 +35,12 @@ Always-on services:
    - `SystemResourceCollector`
 4. Feature pipeline:
    - `FeatureExtractorService` (live extraction is forced off in DatasetCollection mode)
-   - `KeyboardCommandService`
+5. Feature upload/cleanup (all modes):
+   - `FeatureCsvStreamService` (per-row text/csv POST to backend; no-op drain in DatasetCollection mode)
+   - `FeatureCleanupService`
 
 Normal mode only (`Agent:Mode=Normal`):
-5. Send pipeline:
-   - `BatchProducerService`
-   - `BatchSendService`
-6. Feature maintenance/upload:
-   - `FeatureUploadService`
-   - `FeatureCleanupService`
-7. Status pipeline:
+6. Status pipeline:
    - `StatusPollService`
    - `DecisionProcessorService`
 
@@ -182,10 +178,10 @@ When troubleshooting end-to-end behavior, inspect in this sequence:
 
 ## 8) Related docs
 
-- `docs/ARCHITECTURE.md` - runtime architecture and channels.
-- `docs/COLLECTORS.md` - collector-level signal semantics.
-- `docs/EXTRACTOR.md` - feature extraction, schema, storage.
-- `docs/AGGREGATOR_SIGNAL_INVENTORY.md` - signal-to-feature mapping.
+- `docs/active/ARCHITECTURE.md` - runtime architecture and channels.
+- `docs/active/COLLECTORS.md` - collector-level signal semantics.
+- `docs/active/EXTRACTOR.md` - feature extraction, schema, storage.
+- `docs/active/AGGREGATOR_SIGNAL_INVENTORY.md` - signal-to-feature mapping.
 
 ## 9) Per-module source references
 

@@ -54,6 +54,7 @@ ISignalBroadcaster
 - `ForegroundAppChanged`
 - `AppDwell`
 - `AppSwitchRate`
+- `AppFocusHeartbeat`
 
 ### Architecture
 
@@ -159,6 +160,19 @@ Raw export provenance:
 - `native_cadence_sec=1`
 
 **Important**: Only counts switches between different apps. Rejected/debounced transient switches are not counted.
+
+#### `AppFocusHeartbeat`
+Emitted every `15s` while a dwell is open (a foreground app is focused).
+
+Payload fields:
+- `appKey` (24-char hashed identity)
+- `category`
+- `confidence` (`high` or `low`)
+- `dwellStartUtc` (ISO-8601 "O" format UTC timestamp of the current foreground dwell slice start)
+
+Purpose: enables `AppFeatureAggregator` to synthesize an open-dwell overlap segment for
+windows where `AppDwell` has not yet fired. Preserved through buffer compaction so the
+aggregator always has a heartbeat for the current foreground app even after old events are pruned.
 
 ### Startup behavior
 

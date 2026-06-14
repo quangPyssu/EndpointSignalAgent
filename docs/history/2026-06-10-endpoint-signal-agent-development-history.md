@@ -9,8 +9,8 @@
 **EndpointSignalAgent** is a Windows tray application written in C# (.NET) that passively collects behavioral endpoint signals from a user's workstation — foreground application usage, keyboard activity, network state, session lifecycle events, screen saver state, and system resource consumption. These raw signals are continuously extracted into a fixed-schema feature vector (a "feature window") and persisted locally. The system supports two operating modes: a **Normal mode** that can optionally forward features to a backend service, and a **DatasetCollection mode** that wraps collection sessions with structured annotations for supervised-learning dataset construction.
 
 **Branch name:** `deployment_prep`
-**Total commits:** 111
-**Date range:** 2026-01-13 to 2026-06-10
+**Total commits:** ~125 (111 through Jun 10; ~14 added in Phase 8)
+**Date range:** 2026-01-13 to 2026-06-14
 **Primary language:** C# (.NET)
 **Platform target:** Windows (tray app, P/Invoke, Win32 APIs)
 
@@ -27,6 +27,7 @@
 | 5 | Apr 23 – May 17 | Data Pipeline Maturation & Docs | 12 commits |
 | 6 | Jun 1 – Jun 8 | Stabilization & Production Hardening | 11 commits |
 | 7 | Jun 10 | Sleep/Lock/Power-Gap Feature | 13 commits |
+| 8 | Jun 11 – Jun 14 | AppFocusHeartbeat & Replay Pipeline Fix | ~14 commits |
 
 ---
 
@@ -331,21 +332,62 @@ The work proceeded in a clear, well-structured sequence: type definitions first,
 
 ---
 
+## Phase 8 — AppFocusHeartbeat & Replay Pipeline Fix
+**2026-06-11 to 2026-06-14 · ~14 commits**
+
+### Narrative
+
+Phase 8 addressed a systematic data-quality gap discovered during post-collection analysis: in windows where a user had a single app open for the entire window duration without switching, `AppDwell` would not fire until the app was eventually switched away. Any feature window computed from a replay that ended before that switch would see **zero app-attribution time**, even though an app was clearly in the foreground the entire time.
+
+The root cause was architectural: `AppDwell` is only emitted when a dwell *ends*. A window that covers an open, still-running dwell had no signal to attribute time to.
+
+The fix introduced **`AppFocusHeartbeat`** — a new `StateSample` signal type emitted every `15s` by `ApplicationUsageCollector` while any foreground dwell is open. The heartbeat carries `dwellStartUtc`, allowing `AppFeatureAggregator` to synthesize an open-dwell segment `[dwellStartUtc, window.EndUtc)` for the current app and clip it to the target window. This fully resolves the zero-attribution problem for live collection going forward.
+
+For **historical data** already collected without heartbeats, `AppDwellReplayPreprocessor` was added — a preprocessing pass that reads `raw_signals.jsonl`, identifies every gap between a `ForegroundAppChanged` and a subsequent `AppDwell`, and injects synthetic `AppFocusHeartbeat` events at 15-second intervals within those gaps. The file-replay path was updated to run this preprocessor before feature extraction.
+
+`FeatureVersion` was bumped from `1.2.1` to `1.2.2` to mark rows computed with the open-dwell fix.
+
+The `docs/` structure was reorganized in this phase: reference docs moved to `docs/active/`, completed plans to `docs/decrecated/`, history documents to `docs/history/`, and academic content to `docs/Thesis/`.
+
+### Key Commits
+
+| Commit | Date | Message | Significance |
+|---|---|---|---|
+| `24da8a6` | 2026-06-10 | fix: drain empty sleep | Sleep gap drain edge case fix |
+| `c774f40` | 2026-06-10 | chore: sleep data recover | Sleep data recovery tooling |
+| `b590e58` | 2026-06-11 | docs: document AppFocusHeartbeat signal and open-dwell synthesis | Full AppFocusHeartbeat implementation: signal type, emission every 15s, aggregator synthesis, compaction preservation, tests |
+| `e749337` | 2026-06-11 | feat: bump FeatureVersion to 1.2.2 | Schema version reflects open-dwell fix |
+| `cc0d4f2` | 2026-06-11 | Merge Data_Recovery branch | Sleep recovery work integrated |
+| `c5097a2` | 2026-06-11 | feat: AppDwellReplayPreprocessor | Synthetic heartbeat injection for historical replay |
+| `ff67700` | 2026-06-11 | feat: inject synthetic AppFocusHeartbeats in file replay path | Replay pipeline uses preprocessor retroactively |
+| `12421af` | 2026-06-14 | chore: docs | Docs reorganized into active/decrecated/history/Thesis subdirectories |
+
+### Design Decisions
+
+- **Heartbeat cadence of 15s**: Short enough for accurate open-dwell attribution within a 30s window slide. Maximum attribution error is 15s (half a heartbeat interval).
+- **`dwellStartUtc` in payload**: Carrying the dwell start time in the heartbeat allows the aggregator to reconstruct the full segment `[start, windowEnd)` without scanning back through pruned history — critical when buffer compaction has removed earlier events.
+- **Retroactive replay fix via preprocessor**: Rather than treating historical data as permanently contaminated, the preprocessor allows previously collected `raw_signals.jsonl` files to be re-extracted with correct app attribution, making historical rows comparable to future live rows.
+- **FeatureVersion 1.2.2**: Minor bump (1.2.1 → 1.2.2) signals a non-breaking improvement — the schema shape is unchanged, but rows at 1.2.2 have more accurate app-feature values.
+- **Docs reorganization**: Separates always-current reference material (`docs/active/`) from historical artifacts (`docs/decrecated/`, `docs/history/`) and thesis content (`docs/Thesis/`).
+
+---
+
 ## Architectural Evolution Summary
 
 The following table traces how each major component of the system evolved across phases:
 
-| Component | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 | Phase 7 |
-|---|---|---|---|---|---|---|---|
-| Signal bus | Channel per collector | Split spool/extractor channels | — | — | Write overflow fixed | — | Power signals added |
-| Persistence | JSONL spool | SQLite (keyboard) | — | — | 3-stage pipeline formalized | WAL mode; 50MB rotation | — |
-| Upload | Backend send prototype | Toggle | — | — | — | CSV streaming (per-row) | — |
-| UI | Console/worker | — | Tray app (PR #1-3) | — | Tray icon asset | DeviceGuard service | — |
-| Session state | — | — | Refactored | — | Auto session lifecycle | — | Lock/unlock propagated |
-| Feature schema | Flat row prototype | Multi-aggregate; v1.0 | — | +Resource cols; v1.2 | 17-field FeatureRow | 104-col CSV schema | +Quality cols; v1.2.1 |
-| Collectors | ForeApp, ScreenSaver, Network | Keyboard | SessionState refactored | SystemResource (Win32) | Reworked | — | Adaptive lock cadence; Power signals |
-| App categorization | — | — | — | — | — | — | 13 categories; FrozenDictionary |
-| Documentation | — | — | — | SystemResourceCollector.md | Per-module READMEs; full sweep | ARCHITECTURE + EXTRACTOR updated | Full docs sweep |
+| Component | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 | Phase 7 | Phase 8 |
+|---|---|---|---|---|---|---|---|---|
+| Signal bus | Channel per collector | Split spool/extractor channels | — | — | Write overflow fixed | — | Power signals added | AppFocusHeartbeat added |
+| Persistence | JSONL spool | SQLite (keyboard) | — | — | 3-stage pipeline formalized | WAL mode; 50MB rotation | — | — |
+| Upload | Backend send prototype | Toggle | — | — | — | CSV streaming (per-row) | — | — |
+| UI | Console/worker | — | Tray app (PR #1-3) | — | Tray icon asset | DeviceGuard service | — | — |
+| Session state | — | — | Refactored | — | Auto session lifecycle | — | Lock/unlock propagated | — |
+| Feature schema | Flat row prototype | Multi-aggregate; v1.0 | — | +Resource cols; v1.2 | 17-field FeatureRow | 104-col CSV schema | +Quality cols; v1.2.1 | Open-dwell synthesis; v1.2.2 |
+| Collectors | ForeApp, ScreenSaver, Network | Keyboard | SessionState refactored | SystemResource (Win32) | Reworked | — | Adaptive lock cadence; Power signals | AppFocusHeartbeat emission (15s) |
+| App categorization | — | — | — | — | — | — | 13 categories; FrozenDictionary | — |
+| Replay pipeline | — | — | — | — | — | — | — | AppDwellReplayPreprocessor; synthetic heartbeat injection |
+| Documentation | — | — | — | SystemResourceCollector.md | Per-module READMEs; full sweep | ARCHITECTURE + EXTRACTOR updated | Full docs sweep | docs/ restructured into active/decrecated/history/Thesis |
 
 ---
 
@@ -356,14 +398,15 @@ The following table traces how each major component of the system evolved across
 | 1.0 | Phase 2 (Feb 2026) | Initial multi-aggregate feature row |
 | 1.2 | Phase 4 (Apr 12, 2026) | +SystemResource columns (CPU, memory, GPU); PR #5 |
 | 1.2.1 | Phase 7 (Jun 10, 2026) | +`has_collection_gap`, `in_warm_up` quality columns |
+| 1.2.2 | Phase 8 (Jun 11, 2026) | Open-dwell synthesis via `AppFocusHeartbeat`; retroactive replay fix via `AppDwellReplayPreprocessor` |
 
 ---
 
-## Signal Taxonomy as of 2026-06-10
+## Signal Taxonomy as of 2026-06-14
 
 | Domain | Signal Types |
 |---|---|
-| Application | ForegroundAppChanged |
+| Application | ForegroundAppChanged, AppDwell, AppSwitchRate, **AppFocusHeartbeat** *(added Phase 8)* |
 | Screen | ScreenSaverStarted, ScreenSaverStopped |
 | Network | LocalNetworkChanged, VpnStateChanged, WifiLinkChanged |
 | Session | SessionLocked, SessionUnlocked, SessionIdle, SessionActive |
@@ -391,8 +434,8 @@ Several recurring patterns are observable across the commit history:
 
 ## Document Metadata
 
-- **Generated:** 2026-06-10
+- **Generated:** 2026-06-14 (updated from 2026-06-10 original)
 - **Branch:** `deployment_prep`
-- **Total commits surveyed:** 111
-- **Date range:** 2026-01-13 to 2026-06-10
-- **Methodology:** Full `git log` sweep with commit subject, body, and date; cross-referenced against project `README.md`, `docs/ARCHITECTURE.md`, `docs/EXTRACTOR.md`, and source tree structure.
+- **Total commits surveyed:** ~125
+- **Date range:** 2026-01-13 to 2026-06-14
+- **Methodology:** Full `git log` sweep with commit subject, body, and date; cross-referenced against `docs/active/ARCHITECTURE.md`, `docs/active/EXTRACTOR.md`, and source tree structure.
