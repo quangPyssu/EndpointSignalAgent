@@ -178,6 +178,7 @@ When troubleshooting end-to-end behavior, inspect in this sequence:
 
 ## 8) Related docs
 
+- `docs/active/AGENT_BOOTUP.md` - precise startup sequence, phase by phase, with failure modes.
 - `docs/active/ARCHITECTURE.md` - runtime architecture and channels.
 - `docs/active/COLLECTORS.md` - collector-level signal semantics.
 - `docs/active/EXTRACTOR.md` - feature extraction, schema, storage.
