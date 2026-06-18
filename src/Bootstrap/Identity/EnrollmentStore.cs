@@ -46,6 +46,7 @@ public sealed class EnrollmentStore : IEnrollmentStore
                 {
                     _logger.LogInformation("Loaded existing enrollment: {DeviceId}", existing.DeviceId);
                     _tokenStore.Set(existing.Token);
+                    _onReportSecondsReceived?.Invoke(existing.ReportSeconds);
                     _tcs.TrySetResult(existing.DeviceId);
                     return;
                 }
@@ -73,7 +74,7 @@ public sealed class EnrollmentStore : IEnrollmentStore
 
                         var resp = await _backend.EnrollAsync(ct);
 
-                        await SaveEnrollmentAsync(resp.DeviceId, resp.Token);
+                        await SaveEnrollmentAsync(resp.DeviceId, resp.Token, resp.ReportSeconds);
                         _tokenStore.Set(resp.Token);
                         _tcs.TrySetResult(resp.DeviceId);
                         _onReportSecondsReceived?.Invoke(resp.ReportSeconds);
@@ -136,12 +137,12 @@ public sealed class EnrollmentStore : IEnrollmentStore
         }
     }
 
-    private async Task SaveEnrollmentAsync(string deviceId, string token)
+    private async Task SaveEnrollmentAsync(string deviceId, string token, int reportSeconds)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_enrollmentPath)!);
-            var data = new EnrollmentData(deviceId, token, DateTimeOffset.UtcNow);
+            var data = new EnrollmentData(deviceId, token, reportSeconds, DateTimeOffset.UtcNow);
             var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(_enrollmentPath, json);
         }
@@ -151,7 +152,7 @@ public sealed class EnrollmentStore : IEnrollmentStore
         }
     }
 
-    private sealed record EnrollmentData(string DeviceId, string Token, DateTimeOffset EnrolledAt);
+    private sealed record EnrollmentData(string DeviceId, string Token, int ReportSeconds, DateTimeOffset EnrolledAt);
 }
 
 public sealed class EnrollOnStartupService(
