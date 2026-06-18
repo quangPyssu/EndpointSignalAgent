@@ -1,5 +1,4 @@
-﻿using EndpointSignalAgent.Bootstrap.Backend;
-using Microsoft.Extensions.Hosting;
+using EndpointSignalAgent.Bootstrap.Backend;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -13,6 +12,7 @@ public interface IEnrollmentStore
 public sealed class EnrollmentStore : IEnrollmentStore
 {
     private readonly BackendClient _backend;
+    private readonly DeviceTokenStore _tokenStore;
     private readonly ILogger<EnrollmentStore> _logger;
     private readonly string _enrollmentPath = Path.Combine("spool", "enrollment.json");
     private readonly TaskCompletionSource<string> _tcs =
@@ -20,78 +20,66 @@ public sealed class EnrollmentStore : IEnrollmentStore
 
     private int _started;
 
-    public EnrollmentStore(BackendClient backend, ILogger<EnrollmentStore> logger)
+    public EnrollmentStore(
+        BackendClient backend,
+        DeviceTokenStore tokenStore,
+        ILogger<EnrollmentStore> logger)
     {
         _backend = backend;
+        _tokenStore = tokenStore;
         _logger = logger;
     }
 
     public void Start(CancellationToken ct)
     {
-        if (Interlocked.Exchange(ref _started, 1) == 1)
-        {
-            _logger.LogDebug("Enrollment already started");
-            return;
-        }
+        if (Interlocked.Exchange(ref _started, 1) == 1) return;
 
         _ = Task.Run(async () =>
         {
             try
             {
-                // Try to load existing enrollment
-                var existingId = await LoadEnrollmentAsync();
-                if (!string.IsNullOrWhiteSpace(existingId))
+                var existing = await LoadEnrollmentAsync();
+                if (existing is not null)
                 {
-                    _logger.LogInformation("Loaded existing enrollment: {DeviceId}", existingId);
-                    _tcs.TrySetResult(existingId);
+                    _logger.LogInformation("Loaded existing enrollment: {DeviceId}", existing.DeviceId);
+                    _tokenStore.Set(existing.Token);
+                    _tcs.TrySetResult(existing.DeviceId);
                     return;
                 }
 
-                // Enroll new device
-                var deviceName = Environment.MachineName;
-                _logger.LogInformation("Starting enrollment for device: {DeviceName}", deviceName);
-
-                var retryCount = 0;
                 var retryDelay = TimeSpan.FromSeconds(5);
-                var maxRetryDelay = TimeSpan.FromSeconds(60);
+                const double maxRetryDelaySec = 60.0;
+                var attempt = 0;
 
                 while (!ct.IsCancellationRequested)
                 {
                     try
                     {
-                        retryCount++;
-                        _logger.LogDebug("Enrollment attempt #{Attempt}", retryCount);
+                        attempt++;
+                        _logger.LogDebug("Enrollment attempt #{Attempt}", attempt);
 
-                        var id = await _backend.EnrollAsync(deviceName, ct);
-                        
-                        // Save enrollment
-                        await SaveEnrollmentAsync(id);
-                        
-                        _logger.LogInformation("Successfully enrolled with device ID: {DeviceId}", id);
-                        _tcs.TrySetResult(id);
+                        var resp = await _backend.EnrollAsync(ct);
+
+                        await SaveEnrollmentAsync(resp.DeviceId, resp.Token);
+                        _tokenStore.Set(resp.Token);
+                        _tcs.TrySetResult(resp.DeviceId);
                         return;
                     }
-                    catch (OperationCanceledException)
-                    {
-                        _logger.LogWarning("Enrollment cancelled");
-                        throw;
-                    }
+                    catch (OperationCanceledException) { throw; }
                     catch (HttpRequestException ex) when (ex.InnerException is System.Net.Sockets.SocketException socketEx)
                     {
-                        _logger.LogWarning("Enrollment attempt #{Attempt} failed: Connection error (SocketError: {SocketError}). " +
-                            "Backend may be unreachable. Retrying in {Delay} seconds...", 
-                            retryCount, socketEx.SocketErrorCode, retryDelay.TotalSeconds);
-                        
+                        _logger.LogWarning(
+                            "Enrollment attempt #{Attempt} failed (SocketError: {SocketError}). Retrying in {Delay}s",
+                            attempt, socketEx.SocketErrorCode, retryDelay.TotalSeconds);
                         await Task.Delay(retryDelay, ct);
-                        retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 1.5, maxRetryDelay.TotalSeconds));
+                        retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 1.5, maxRetryDelaySec));
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Enrollment attempt #{Attempt} failed, retrying in {Delay} seconds...", 
-                            retryCount, retryDelay.TotalSeconds);
-                        
+                        _logger.LogWarning(ex, "Enrollment attempt #{Attempt} failed, retrying in {Delay}s",
+                            attempt, retryDelay.TotalSeconds);
                         await Task.Delay(retryDelay, ct);
-                        retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 1.5, maxRetryDelay.TotalSeconds));
+                        retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 1.5, maxRetryDelaySec));
                     }
                 }
             }
@@ -110,26 +98,22 @@ public sealed class EnrollmentStore : IEnrollmentStore
 
     public Task<string> GetIdAsync(CancellationToken ct) => _tcs.Task.WaitAsync(ct);
 
-    private async Task<string?> LoadEnrollmentAsync()
+    private async Task<EnrollmentData?> LoadEnrollmentAsync()
     {
         try
         {
-            if (!File.Exists(_enrollmentPath))
-            {
-                _logger.LogDebug("No enrollment file found at {Path}", _enrollmentPath);
-                return null;
-            }
+            if (!File.Exists(_enrollmentPath)) return null;
 
             var json = await File.ReadAllTextAsync(_enrollmentPath);
             var data = JsonSerializer.Deserialize<EnrollmentData>(json);
-            
-            if (data is null || string.IsNullOrWhiteSpace(data.DeviceId))
+
+            if (data is null || string.IsNullOrWhiteSpace(data.DeviceId) || string.IsNullOrWhiteSpace(data.Token))
             {
-                _logger.LogWarning("Invalid enrollment data in file");
+                _logger.LogWarning("Invalid or legacy enrollment file — re-enrolling");
                 return null;
             }
 
-            return data.DeviceId;
+            return data;
         }
         catch (Exception ex)
         {
@@ -138,17 +122,14 @@ public sealed class EnrollmentStore : IEnrollmentStore
         }
     }
 
-    private async Task SaveEnrollmentAsync(string deviceId)
+    private async Task SaveEnrollmentAsync(string deviceId, string token)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_enrollmentPath)!);
-            
-            var data = new EnrollmentData(deviceId, DateTimeOffset.UtcNow);
+            var data = new EnrollmentData(deviceId, token, DateTimeOffset.UtcNow);
             var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-            
             await File.WriteAllTextAsync(_enrollmentPath, json);
-            _logger.LogDebug("Enrollment saved to {Path}", _enrollmentPath);
         }
         catch (Exception ex)
         {
@@ -156,24 +137,17 @@ public sealed class EnrollmentStore : IEnrollmentStore
         }
     }
 
-    private sealed record EnrollmentData(string DeviceId, DateTimeOffset EnrolledAt);
+    private sealed record EnrollmentData(string DeviceId, string Token, DateTimeOffset EnrolledAt);
 }
 
-public sealed class EnrollOnStartupService : BackgroundService
+public sealed class EnrollOnStartupService(
+    EnrollmentStore store,
+    ILogger<EnrollOnStartupService> logger) : Microsoft.Extensions.Hosting.BackgroundService
 {
-    private readonly EnrollmentStore _store;
-    private readonly ILogger<EnrollOnStartupService> _logger;
-
-    public EnrollOnStartupService(EnrollmentStore store, ILogger<EnrollOnStartupService> logger)
-    {
-        _store = store;
-        _logger = logger;
-    }
-
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Starting enrollment service");
-        _store.Start(stoppingToken);
+        logger.LogInformation("Starting enrollment service");
+        store.Start(stoppingToken);
         return Task.CompletedTask;
     }
 }

@@ -22,39 +22,43 @@ public sealed class BackendClient
         _logger = logger;
     }
 
-    public async Task<string> EnrollAsync(string deviceName, CancellationToken ct)
+    public async Task<EnrollResponse> EnrollAsync(CancellationToken ct)
     {
         if (!_opts.UseBackend)
         {
             var simulatedId = Guid.NewGuid().ToString("D");
             _logger.LogInformation("Enrollment simulated (Backend:UseBackend=false). DeviceId={DeviceId}", simulatedId);
-            return simulatedId;
+            return new EnrollResponse(DeviceId: simulatedId, Token: "simulated-token", ReportSeconds: 60);
         }
 
         try
         {
-            var req = new EnrollRequest(DeviceName: deviceName);
-            _logger.LogDebug("Enrolling device '{DeviceName}' to {Url}", deviceName, $"{_opts.BaseUrl}{_opts.EnrollPath}");
-            
+            var req = new EnrollRequest(
+                DeviceId: null,
+                Hostname: Environment.MachineName,
+                Os: Environment.OSVersion.ToString(),
+                AgentVersion: typeof(BackendClient).Assembly.GetName().Version?.ToString()
+            );
+            _logger.LogDebug("Enrolling to {Url}", $"{_opts.BaseUrl}{_opts.EnrollPath}");
+
             var resp = await _http.PostAsJsonAsync(_opts.EnrollPath, req, ct);
-            
+
             if (!resp.IsSuccessStatusCode)
             {
                 var errorContent = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Enrollment failed with status {StatusCode}: {Error}", 
-                    (int)resp.StatusCode, errorContent);
+                _logger.LogWarning("Enrollment failed {Status}: {Error}", (int)resp.StatusCode, errorContent);
                 throw new HttpRequestException($"Enroll failed status {(int)resp.StatusCode}: {errorContent}");
             }
-            
+
             var enrollResp = await resp.Content.ReadFromJsonAsync<EnrollResponse>(cancellationToken: ct);
-            if (enrollResp == null || string.IsNullOrWhiteSpace(enrollResp.DeviceId))
+            if (enrollResp is null || string.IsNullOrWhiteSpace(enrollResp.DeviceId))
             {
                 _logger.LogWarning("Enrollment response missing device ID");
                 throw new HttpRequestException("Enroll failed: invalid response");
             }
-            
-            _logger.LogInformation("Successfully enrolled device with ID: {DeviceId}", enrollResp.DeviceId);
-            return enrollResp.DeviceId;
+
+            _logger.LogInformation("Enrolled device {DeviceId}", enrollResp.DeviceId);
+            return enrollResp;
         }
         catch (HttpRequestException ex)
         {

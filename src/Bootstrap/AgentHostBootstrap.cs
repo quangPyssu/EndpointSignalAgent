@@ -139,6 +139,8 @@ public static class AgentHostBootstrap
             });
         });
 
+        builder.Services.AddSingleton<DeviceTokenStore>();
+        builder.Services.AddTransient<BearerTokenHandler>();
         builder.Services.AddSingleton<IAgentIdentity, AgentIdentity>();
         builder.Services.AddSingleton<EnrollmentStore>();
         builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
@@ -152,7 +154,8 @@ public static class AgentHostBootstrap
                 client.BaseAddress = new Uri(opts.BaseUrl);
                 client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
             }
-        });
+        })
+        .AddHttpMessageHandler<BearerTokenHandler>();
 
         builder.Services.AddHttpClient("BackendClient", (sp, client) =>
         {
@@ -162,7 +165,8 @@ public static class AgentHostBootstrap
                 client.BaseAddress = new Uri(opts.BaseUrl);
                 client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
             }
-        });
+        })
+        .AddHttpMessageHandler<BearerTokenHandler>();
 
         builder.Services.AddSingleton<ISignalProvider>(sp =>
         {
