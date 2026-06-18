@@ -52,8 +52,14 @@ public sealed class SignalUploadService(
                     var req = new SignalBatchRequest(DeviceId: deviceId, Signals: batched);
                     var resp = await backend.SendAsync(req, stoppingToken);
 
+                    if (resp is null)
+                    {
+                        logger.LogWarning("SendAsync returned null for device {DeviceId}; treating as failure", deviceId);
+                        throw new InvalidOperationException("SendAsync returned null response");
+                    }
+
                     logger.LogDebug("Uploaded {Count} signals, accepted={Accepted}",
-                        batched.Count, resp?.Accepted ?? 0);
+                        batched.Count, resp.Accepted);
 
                     backoff = TimeSpan.FromSeconds(5);
                 }

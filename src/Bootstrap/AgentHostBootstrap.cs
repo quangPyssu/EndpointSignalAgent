@@ -142,8 +142,6 @@ public static class AgentHostBootstrap
         builder.Services.AddSingleton<DeviceTokenStore>();
         builder.Services.AddTransient<BearerTokenHandler>();
         builder.Services.AddSingleton<IAgentIdentity, AgentIdentity>();
-        builder.Services.AddSingleton<EnrollmentStore>();
-        builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
         builder.Services.AddHostedService<EnrollOnStartupService>();
 
         builder.Services.AddHttpClient<BackendClient>((sp, client) =>
@@ -185,6 +183,15 @@ public static class AgentHostBootstrap
         if (!isDatasetMode)
         {
             builder.Services.AddSingleton<IAgentState, AgentState>();
+            builder.Services.AddSingleton<EnrollmentStore>(sp =>
+            {
+                var backend = sp.GetRequiredService<BackendClient>();
+                var tokenStore = sp.GetRequiredService<DeviceTokenStore>();
+                var logger = sp.GetRequiredService<ILogger<EnrollmentStore>>();
+                var agentState = sp.GetRequiredService<IAgentState>();
+                return new EnrollmentStore(backend, tokenStore, logger, onReportSecondsReceived: agentState.TrySetReportSeconds);
+            });
+            builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
             builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
             builder.Services.AddHostedService<StatusPollService>();
             builder.Services.AddHostedService<DecisionProcessorService>();
@@ -192,6 +199,8 @@ public static class AgentHostBootstrap
         }
         else
         {
+            builder.Services.AddSingleton<EnrollmentStore>();
+            builder.Services.AddSingleton<IEnrollmentStore>(sp => sp.GetRequiredService<EnrollmentStore>());
             builder.Services.AddSingleton<SessionManifestStore>();
             builder.Services.AddSingleton<AnnotationStore>();
             builder.Services.AddSingleton<ProgressStateStore>();

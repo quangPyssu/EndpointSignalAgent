@@ -75,6 +75,7 @@ public sealed class FeatureCsvStreamService : BackgroundService
                     {
                         var ids = unsent.Select(r => r.Id).ToList();
                         await _featureStore.MarkAsSentAsync(ids, stoppingToken);
+                        backoff = TimeSpan.FromSeconds(5);
                         continue;
                     }
 
@@ -126,14 +127,15 @@ public sealed class FeatureCsvStreamService : BackgroundService
                     if (sentIds.Count > 0)
                         await _featureStore.MarkAsSentAsync(sentIds, stoppingToken);
 
-                    backoff = anyFailed
-                        ? TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, backoffMaxSec))
-                        : TimeSpan.FromSeconds(5);
-
                     if (anyFailed)
                     {
                         _logger.LogWarning("Features upload partial failure; retrying in {Backoff}s", backoff.TotalSeconds);
                         await Task.Delay(backoff, stoppingToken);
+                        backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, backoffMaxSec));
+                    }
+                    else
+                    {
+                        backoff = TimeSpan.FromSeconds(5);
                     }
                 }
                 catch (OperationCanceledException) { throw; }

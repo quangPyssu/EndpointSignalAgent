@@ -18,16 +18,19 @@ public sealed class EnrollmentStore : IEnrollmentStore
     private readonly TaskCompletionSource<string> _tcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    private readonly Action<int>? _onReportSecondsReceived;
     private int _started;
 
     public EnrollmentStore(
         BackendClient backend,
         DeviceTokenStore tokenStore,
-        ILogger<EnrollmentStore> logger)
+        ILogger<EnrollmentStore> logger,
+        Action<int>? onReportSecondsReceived = null)
     {
         _backend = backend;
         _tokenStore = tokenStore;
         _logger = logger;
+        _onReportSecondsReceived = onReportSecondsReceived;
     }
 
     public void Start(CancellationToken ct)
@@ -73,6 +76,7 @@ public sealed class EnrollmentStore : IEnrollmentStore
                         await SaveEnrollmentAsync(resp.DeviceId, resp.Token);
                         _tokenStore.Set(resp.Token);
                         _tcs.TrySetResult(resp.DeviceId);
+                        _onReportSecondsReceived?.Invoke(resp.ReportSeconds);
                         return;
                     }
                     catch (OperationCanceledException) { throw; }
