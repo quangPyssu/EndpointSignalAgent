@@ -1,0 +1,2 @@
+participant_id,number_of_windows,number_of_unique_states,number_of_unique_transitions,rare_transition_pct,normal_val_unseen_rate,abnormal_unseen_rate
+001,12788,29,205,0.6098,0.0058,0.0074
