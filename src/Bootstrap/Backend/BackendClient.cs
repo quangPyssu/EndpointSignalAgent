@@ -102,34 +102,41 @@ public sealed class BackendClient
         }
     }
 
-    public async Task<StatusResponse?> PollStatusAsync(StatusRequest req, CancellationToken ct)
+    public async Task<StatusDecision?> PollStatusAsync(string deviceId, CancellationToken ct)
     {
         if (!_opts.UseBackend)
         {
             await Task.Delay(50, ct);
-            var status = new StatusResponse(Status: "active");
-            _logger.LogDebug("Status poll (simulated) returned: {Status}", status.Status);
-            return status;
+            var simulated = new StatusDecision(
+                DeviceId: deviceId,
+                Label: KnownLabels.Allow,
+                Score: 1.0,
+                Reason: "simulated",
+                ModelVersion: "sim",
+                WindowStartTs: DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                DecidedAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                TtlSeconds: 60);
+            _logger.LogDebug("Status poll (simulated): label={Label}", simulated.Label);
+            return simulated;
         }
 
         try
         {
-            _logger.LogDebug("Polling status for device {DeviceId}", req.DeviceId);
-            
-            var resp = await _http.PostAsJsonAsync(_opts.StatusPath, req, ct);
-            
+            var url = $"{_opts.StatusPath}?device_id={Uri.EscapeDataString(deviceId)}";
+            _logger.LogDebug("Polling status: GET {Url}", url);
+
+            var resp = await _http.GetAsync(url, ct);
+
             if (!resp.IsSuccessStatusCode)
             {
-                var errorContent = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Status poll failed with status {StatusCode}: {Error}", 
-                    (int)resp.StatusCode, errorContent);
-                throw new HttpRequestException($"Status failed status {(int)resp.StatusCode}: {errorContent}");
+                var err = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogWarning("Status poll failed {Status}: {Error}", (int)resp.StatusCode, err);
+                throw new HttpRequestException($"Status failed status {(int)resp.StatusCode}: {err}");
             }
 
-            var status = await resp.Content.ReadFromJsonAsync<StatusResponse>(cancellationToken: ct);
-            _logger.LogDebug("Status poll returned: {Status}", status?.Status ?? "null");
-            
-            return status;
+            var decision = await resp.Content.ReadFromJsonAsync<StatusDecision>(cancellationToken: ct);
+            _logger.LogDebug("Status poll: label={Label}", decision?.Label ?? "null");
+            return decision;
         }
         catch (HttpRequestException ex)
         {

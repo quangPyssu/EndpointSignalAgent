@@ -1,3 +1,4 @@
+// src/Shared/Services/DecisionProcessorService.cs
 using System.Threading.Channels;
 using EndpointSignalAgent.Shared.Contracts;
 using EndpointSignalAgent.Shared.Handlers;
@@ -8,7 +9,7 @@ namespace EndpointSignalAgent.Shared.Services;
 
 public sealed class DecisionProcessorService(
     ILogger<DecisionProcessorService> logger,
-    Channel<StatusResponse> decisionQueue,
+    Channel<StatusDecision> decisionQueue,
     IDecisionHandler handler)
     : BackgroundService
 {
@@ -18,9 +19,9 @@ public sealed class DecisionProcessorService(
 
         try
         {
-            await foreach (var status in decisionQueue.Reader.ReadAllAsync(stoppingToken))
+            await foreach (var decision in decisionQueue.Reader.ReadAllAsync(stoppingToken))
             {
-                handler.Handle(status);
+                handler.Handle(decision);
             }
         }
         catch (OperationCanceledException) { }

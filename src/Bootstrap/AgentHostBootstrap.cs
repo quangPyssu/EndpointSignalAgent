@@ -131,7 +131,7 @@ public static class AgentHostBootstrap
         builder.Services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-            return Channel.CreateBounded<StatusResponse>(new BoundedChannelOptions(opts.DecisionQueueCapacity)
+            return Channel.CreateBounded<StatusDecision>(new BoundedChannelOptions(opts.DecisionQueueCapacity)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleWriter = true,
