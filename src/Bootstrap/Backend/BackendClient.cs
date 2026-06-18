@@ -76,29 +76,24 @@ public sealed class BackendClient
     {
         if (!_opts.UseBackend)
         {
-            _logger.LogDebug("Sending signal batch for device {DeviceId} (simulated)", req.DeviceId);
-            await Task.Delay(100, ct);
-            _logger.LogDebug("Signal batch sent (simulated), success={Success}", true);
-            return new SignalBatchResponse(true);
+            _logger.LogDebug("Signal batch for device {DeviceId} (simulated, count={Count})",
+                req.DeviceId, req.Signals.Count);
+            return new SignalBatchResponse(Accepted: req.Signals.Count);
         }
 
         try
         {
-            _logger.LogDebug("Sending signal batch for device {DeviceId}", req.DeviceId);
+            _logger.LogDebug("Sending {Count} signals for device {DeviceId}", req.Signals.Count, req.DeviceId);
             var resp = await _http.PostAsJsonAsync(_opts.SendPath, req, ct);
 
             if (!resp.IsSuccessStatusCode)
             {
-                var errorContent = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Signal send failed with status {StatusCode}: {Error}",
-                    (int)resp.StatusCode, errorContent);
-                throw new HttpRequestException($"Send failed status {(int)resp.StatusCode}: {errorContent}");
+                var err = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogWarning("Signal send failed {Status}: {Error}", (int)resp.StatusCode, err);
+                throw new HttpRequestException($"Send failed status {(int)resp.StatusCode}: {err}");
             }
 
-            var sendResp = await resp.Content.ReadFromJsonAsync<SignalBatchResponse>(cancellationToken: ct);
-            _logger.LogDebug("Signal batch sent, success={Success}", sendResp?.Success ?? false);
-
-            return sendResp;
+            return await resp.Content.ReadFromJsonAsync<SignalBatchResponse>(cancellationToken: ct);
         }
         catch (HttpRequestException ex)
         {

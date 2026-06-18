@@ -199,6 +199,7 @@ public static class AgentHostBootstrap
             builder.Services.AddSingleton<IDecisionHandler, DefaultDecisionHandler>();
             builder.Services.AddHostedService<StatusPollService>();
             builder.Services.AddHostedService<DecisionProcessorService>();
+            builder.Services.AddHostedService<SignalUploadService>();
         }
         else
         {
