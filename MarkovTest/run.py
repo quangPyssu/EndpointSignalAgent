@@ -1,10 +1,9 @@
 """
 Usage:
-    python run.py                          # W60_S30, all 15 participants
-    python run.py --profile W120_S60
-    python run.py --profile W30_S15
-    python run.py --profile W60_S30 --participants 1 2 3
-    python run.py --profile W60_S30 --out results/report_W60_S30.csv
+    python run.py                                      # vA, W60_S30, all 15 participants
+    python run.py --version vB --profile W60_S30
+    python run.py --version vC --out results/report_vC_W60_S30.csv
+    python run.py --version vD --participants 1 2 3
 """
 import argparse
 import sys
@@ -12,22 +11,39 @@ from pathlib import Path
 
 from loader import load_all_participants, DEFAULT_PROFILES
 from states import assign_markov_state_vA
+from states_vB import assign_markov_state_vB
+from states_vC import assign_markov_state_vC
+from states_vD import assign_markov_state_vD
 from report import build_participant_report, print_summary, save_reports_csv
+
+_VERSION_FN = {
+    "vA": assign_markov_state_vA,
+    "vB": assign_markov_state_vB,
+    "vC": assign_markov_state_vC,
+    "vD": assign_markov_state_vD,
+}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Markov State Version A — real-data analysis")
+    parser = argparse.ArgumentParser(description="Markov State evaluation — multi-version")
+    parser.add_argument("--version", choices=list(_VERSION_FN), default="vA",
+                        help="State schema version (default: vA)")
     parser.add_argument("--profile", choices=DEFAULT_PROFILES, default="W60_S30")
     parser.add_argument(
         "--participants", nargs="*", type=int, default=None,
-        help="Folder numbers to include (e.g. 1 2 3). Default: all 1-15."
+        help="Folder numbers to include (e.g. 1 2 3). Default: all 1-15.",
     )
-    parser.add_argument("--out", default="markov_report_vA.csv", help="Output CSV path")
+    parser.add_argument(
+        "--out", default=None,
+        help="Output CSV path. Default: results/report_{VERSION}_{PROFILE}.csv",
+    )
     args = parser.parse_args()
 
-    participant_numbers = args.participants if args.participants else list(range(1, 16))
+    out_path = args.out or f"results/report_{args.version}_{args.profile}.csv"
+    participant_numbers = args.participants or list(range(1, 16))
 
-    print(f"Loading profile={args.profile} for {len(participant_numbers)} participant(s)...")
+    print(f"Loading version={args.version} profile={args.profile} "
+          f"for {len(participant_numbers)} participant(s)...")
     df = load_all_participants(
         participant_folder_numbers=participant_numbers,
         profiles=[args.profile],
@@ -37,18 +53,24 @@ def main():
         print("ERROR: No data loaded. Check E:/DataBase paths.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Loaded {len(df):,} rows ({df['is_abnormal'].sum():,} abnormal tagged). Assigning markov_state_vA...")
-    df["markov_state_vA"] = df.apply(assign_markov_state_vA, axis=1)
+    state_col = f"markov_state_{args.version}"
+    assign_fn = _VERSION_FN[args.version]
 
-    print(f"\nTop states overall:\n{df['markov_state_vA'].value_counts().head(10).to_string()}\n")
+    print(f"Loaded {len(df):,} rows ({df['is_abnormal'].sum():,} abnormal tagged). "
+          f"Assigning {state_col}...")
+    df[state_col] = df.apply(assign_fn, axis=1)
 
-    participant_ids = sorted(df["participant_id"].unique())
-    reports = [build_participant_report(df, pid) for pid in participant_ids]
+    print(f"\nTop states overall:\n{df[state_col].value_counts().head(10).to_string()}\n")
 
-    print("\n=== Per-participant summary ===")
+    # analysis.py expects "markov_state_vA" — rename for compatibility
+    analysis_df = df.rename(columns={state_col: "markov_state_vA"})
+
+    participant_ids = sorted(analysis_df["participant_id"].unique())
+    reports = [build_participant_report(analysis_df, pid) for pid in participant_ids]
+
+    print(f"\n=== Per-participant summary ({args.version} / {args.profile}) ===")
     print_summary(reports)
 
-    out_path = args.out
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     save_reports_csv(reports, out_path)
 
