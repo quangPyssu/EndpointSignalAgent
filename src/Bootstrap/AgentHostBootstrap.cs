@@ -157,17 +157,6 @@ public static class AgentHostBootstrap
         })
         .AddHttpMessageHandler<BearerTokenHandler>();
 
-        builder.Services.AddHttpClient("BackendClient", (sp, client) =>
-        {
-            var opts = sp.GetRequiredService<IOptions<BackendOptions>>().Value;
-            if (opts.UseBackend)
-            {
-                client.BaseAddress = new Uri(opts.BaseUrl);
-                client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
-            }
-        })
-        .AddHttpMessageHandler<BearerTokenHandler>();
-
         builder.Services.AddSingleton<ISignalProvider>(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<SpoolFileSignalProvider>>();

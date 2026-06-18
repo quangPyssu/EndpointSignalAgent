@@ -1,9 +1,10 @@
-using System.Net.Http.Headers;
-using System.Text;
+// src/FeatureExtraction/Services/FeatureCsvStreamService.cs
+using EndpointSignalAgent.Bootstrap.Backend;
 using EndpointSignalAgent.Bootstrap.Configuration;
 using EndpointSignalAgent.Bootstrap.Identity;
 using EndpointSignalAgent.FeatureExtraction.Configuration;
 using EndpointSignalAgent.FeatureExtraction.Storage;
+using EndpointSignalAgent.Shared.Contracts;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,9 +12,9 @@ using Microsoft.Extensions.Options;
 namespace EndpointSignalAgent.FeatureExtraction.Services;
 
 /// <summary>
-/// Polls the local FeatureStore for unsent rows and POSTs each as a single
-/// text/csv row to the backend. Rows are sent serially, oldest first.
-/// SQLite acts as the write-ahead buffer so no data is lost during disconnects.
+/// Polls the local FeatureStore for unsent rows and POSTs them in JSON batches
+/// to POST /features. SQLite acts as the write-ahead buffer so no data is lost
+/// during disconnects.
 /// </summary>
 public sealed class FeatureCsvStreamService : BackgroundService
 {
@@ -22,7 +23,7 @@ public sealed class FeatureCsvStreamService : BackgroundService
     private readonly IEnrollmentStore _enrollment;
     private readonly IOptions<FeatureExtractorOptions> _extractorOptions;
     private readonly IOptions<BackendOptions> _backendOptions;
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly BackendClient _backend;
 
     public FeatureCsvStreamService(
         ILogger<FeatureCsvStreamService> logger,
@@ -30,14 +31,14 @@ public sealed class FeatureCsvStreamService : BackgroundService
         IEnrollmentStore enrollment,
         IOptions<FeatureExtractorOptions> extractorOptions,
         IOptions<BackendOptions> backendOptions,
-        IHttpClientFactory httpClientFactory)
+        BackendClient backend)
     {
         _logger = logger;
         _featureStore = featureStore;
         _enrollment = enrollment;
         _extractorOptions = extractorOptions;
         _backendOptions = backendOptions;
-        _httpClientFactory = httpClientFactory;
+        _backend = backend;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,13 +49,12 @@ public sealed class FeatureCsvStreamService : BackgroundService
             return;
         }
 
-        await _enrollment.GetIdAsync(stoppingToken); // wait for enrollment
-
-        _logger.LogInformation("FeatureCsvStreamService started");
+        var deviceId = await _enrollment.GetIdAsync(stoppingToken);
+        _logger.LogInformation("FeatureCsvStreamService started for device {DeviceId}", deviceId);
 
         var pollInterval = TimeSpan.FromSeconds(30);
         var backoff = TimeSpan.FromSeconds(5);
-        const double backoffMax = 120.0;
+        const double backoffMaxSec = 120.0;
 
         try
         {
@@ -71,33 +71,69 @@ public sealed class FeatureCsvStreamService : BackgroundService
                         continue;
                     }
 
+                    if (!_backendOptions.Value.UseBackend)
+                    {
+                        var ids = unsent.Select(r => r.Id).ToList();
+                        await _featureStore.MarkAsSentAsync(ids, stoppingToken);
+                        continue;
+                    }
+
+                    // Group by (feature_version, window_sec) — backend requires a single value per request
+                    var groups = unsent
+                        .GroupBy(r => (r.FeatureVersion, r.WindowSec))
+                        .ToList();
+
+                    var sentIds = new List<long>();
                     var anyFailed = false;
-                    foreach (var row in unsent)
+
+                    foreach (var group in groups)
                     {
                         stoppingToken.ThrowIfCancellationRequested();
 
-                        var sent = _backendOptions.Value.UseBackend
-                            ? await PostRowAsync(row, stoppingToken)
-                            : true; // offline mode: mark sent immediately
+                        var rows = group
+                            .Select(r =>
+                            {
+                                var row = new Dictionary<string, object>
+                                {
+                                    ["window_start_ts"] = r.WindowStartTs.ToUnixTimeSeconds()
+                                };
+                                foreach (var (k, v) in r.Features)
+                                    row[k] = v;
+                                return row;
+                            })
+                            .ToList();
 
-                        if (sent)
+                        var req = new FeaturesRequest(
+                            DeviceId: deviceId,
+                            FeatureVersion: group.Key.FeatureVersion,
+                            WindowSec: group.Key.WindowSec,
+                            Rows: rows);
+
+                        try
                         {
-                            await _featureStore.MarkAsSentAsync([row.Id], stoppingToken);
+                            var resp = await _backend.PostFeaturesAsync(req, stoppingToken);
+                            _logger.LogDebug("Features batch accepted={Accepted}", resp?.Accepted ?? 0);
+                            sentIds.AddRange(group.Select(r => r.Id));
                         }
-                        else
+                        catch (HttpRequestException ex)
                         {
+                            _logger.LogWarning(ex, "Features batch failed for version={Version}", group.Key.FeatureVersion);
                             anyFailed = true;
-                            break; // stop this batch; retry next poll cycle
+                            break;
                         }
                     }
 
-                    if (!anyFailed)
-                        backoff = TimeSpan.FromSeconds(5);
-                    else
+                    if (sentIds.Count > 0)
+                        await _featureStore.MarkAsSentAsync(sentIds, stoppingToken);
+
+                    backoff = anyFailed
+                        ? TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, backoffMaxSec))
+                        : TimeSpan.FromSeconds(5);
+
+                    if (anyFailed)
                     {
-                        _logger.LogWarning("Row upload failed; retrying in {Backoff}s", backoff.TotalSeconds);
+                        _logger.LogWarning("Features upload partial failure; retrying in {Backoff}s", backoff.TotalSeconds);
                         await Task.Delay(backoff, stoppingToken);
-                        backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, backoffMax));
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -105,39 +141,12 @@ public sealed class FeatureCsvStreamService : BackgroundService
                 {
                     _logger.LogError(ex, "FeatureCsvStreamService cycle error");
                     await Task.Delay(backoff, stoppingToken);
-                    backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, backoffMax));
+                    backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, backoffMaxSec));
                 }
             }
         }
         catch (OperationCanceledException) { }
 
         _logger.LogInformation("FeatureCsvStreamService stopped");
-    }
-
-    private async Task<bool> PostRowAsync(
-        EndpointSignalAgent.FeatureExtraction.Contracts.FeatureRow row,
-        CancellationToken ct)
-    {
-        try
-        {
-            var csvBody = FeatureCsvRowSerializer.Header + "\n" + FeatureCsvRowSerializer.SerializeRow(row);
-            using var content = new StringContent(csvBody, Encoding.UTF8);
-            content.Headers.ContentType = new MediaTypeHeaderValue("text/csv");
-
-            using var client = _httpClientFactory.CreateClient("BackendClient");
-            using var response = await client.PostAsync(
-                _backendOptions.Value.FeatureRowCsvPath, content, ct);
-
-            if (response.IsSuccessStatusCode) return true;
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogWarning("CSV row POST failed ({Status}): {Body}", response.StatusCode, body);
-            return false;
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning(ex, "CSV row POST — HTTP error");
-            return false;
-        }
     }
 }

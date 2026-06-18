@@ -10,7 +10,6 @@ public sealed class BackendOptions
     public string SendPath { get; set; } = "/send";
     public string StatusPath { get; set; } = "/status";
     public string FeaturesPath { get; set; } = "/features";
-    public string FeatureRowCsvPath { get; set; } = "/features/row";
     public int TimeoutSeconds { get; set; } = 30;
     public int SignalUploadBatchSize { get; set; } = 500;
     public int SignalUploadIntervalSeconds { get; set; } = 30;

@@ -102,6 +102,35 @@ public sealed class BackendClient
         }
     }
 
+    public async Task<FeaturesResponse?> PostFeaturesAsync(FeaturesRequest req, CancellationToken ct)
+    {
+        if (!_opts.UseBackend)
+        {
+            _logger.LogDebug("Features batch (simulated, count={Count})", req.Rows.Count);
+            return new FeaturesResponse(Accepted: req.Rows.Count, Rejected: []);
+        }
+
+        try
+        {
+            _logger.LogDebug("Posting {Count} feature rows for device {DeviceId}", req.Rows.Count, req.DeviceId);
+            var resp = await _http.PostAsJsonAsync(_opts.FeaturesPath, req, ct);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var err = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogWarning("Features POST failed {Status}: {Error}", (int)resp.StatusCode, err);
+                throw new HttpRequestException($"Features failed status {(int)resp.StatusCode}: {err}");
+            }
+
+            return await resp.Content.ReadFromJsonAsync<FeaturesResponse>(cancellationToken: ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "HTTP error posting features to {Url}", $"{_opts.BaseUrl}{_opts.FeaturesPath}");
+            throw;
+        }
+    }
+
     public async Task<StatusDecision?> PollStatusAsync(string deviceId, CancellationToken ct)
     {
         if (!_opts.UseBackend)
