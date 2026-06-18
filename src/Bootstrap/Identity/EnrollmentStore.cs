@@ -58,6 +58,16 @@ public sealed class EnrollmentStore : IEnrollmentStore
                         attempt++;
                         _logger.LogDebug("Enrollment attempt #{Attempt}", attempt);
 
+                        // Wait for backend to be ready before first enroll attempt
+                        if (attempt == 1)
+                        {
+                            while (!ct.IsCancellationRequested && !await _backend.CheckReadyAsync(ct))
+                            {
+                                _logger.LogDebug("Backend not ready yet, waiting 5s before enroll...");
+                                await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                            }
+                        }
+
                         var resp = await _backend.EnrollAsync(ct);
 
                         await SaveEnrollmentAsync(resp.DeviceId, resp.Token);

@@ -173,4 +173,34 @@ public sealed class BackendClient
             throw;
         }
     }
+
+    public async Task<bool> CheckLiveAsync(CancellationToken ct)
+    {
+        if (!_opts.UseBackend) return true;
+        try
+        {
+            var resp = await _http.GetAsync(_opts.HealthzPath, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Liveness probe failed");
+            return false;
+        }
+    }
+
+    public async Task<bool> CheckReadyAsync(CancellationToken ct)
+    {
+        if (!_opts.UseBackend) return true;
+        try
+        {
+            var resp = await _http.GetAsync(_opts.ReadyzPath, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Readiness probe failed");
+            return false;
+        }
+    }
 }
