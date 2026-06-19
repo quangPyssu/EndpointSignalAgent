@@ -3,6 +3,7 @@ import json
 import sqlite3
 from datetime import timezone
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -11,9 +12,14 @@ DEFAULT_PROFILES = ["W60_S30", "W120_S60", "W30_S15"]
 _ALL_PARTICIPANT_NUMBERS = list(range(1, 16))
 
 
-def _find_participant_subfolder(folder: str) -> str | None:
+def _find_participant_subfolder(folder: str) -> Optional[str]:
+    # Windows layout: DataBase/N/participant_*/
     matches = glob.glob(str(Path(folder) / "participant_*" / ""))
-    return matches[0].rstrip("/\\") if matches else None
+    if matches:
+        return matches[0].rstrip("/\\")
+    # Mac flat layout: DataBase/N/ (annotations live directly here)
+    ann = glob.glob(str(Path(folder) / "session_*.annotations.json"))
+    return folder if ann else None
 
 
 def _load_abnormal_intervals(participant_subfolder: str) -> list[tuple]:
@@ -44,16 +50,21 @@ def _tag_abnormal(df: pd.DataFrame, intervals: list[tuple]) -> pd.DataFrame:
     return df
 
 
-def _find_db(folder: str) -> str | None:
+def _find_db(folder: str) -> Optional[str]:
+    # Windows layout: DataBase/N/participant_*/features.db
     matches = glob.glob(str(Path(folder) / "participant_*" / "features.db"))
-    return matches[0] if matches else None
+    if matches:
+        return matches[0]
+    # Mac flat layout: DataBase/N/features.db
+    flat = Path(folder) / "features.db"
+    return str(flat) if flat.exists() else None
 
 
 
 def load_participant_db(
     db_path: str,
     participant_id: str,
-    profiles: list[str] | None = None,
+    profiles: Optional[list] = None,
 ) -> pd.DataFrame:
     if profiles is None:
         profiles = DEFAULT_PROFILES
@@ -80,8 +91,8 @@ def load_participant_db(
 
 def load_all_participants(
     base_dir: str = DEFAULT_BASE,
-    participant_folder_numbers: list[int] | None = None,
-    profiles: list[str] = DEFAULT_PROFILES,
+    participant_folder_numbers: Optional[list] = None,
+    profiles: list = DEFAULT_PROFILES,
 ) -> pd.DataFrame:
     if participant_folder_numbers is None:
         participant_folder_numbers = _ALL_PARTICIPANT_NUMBERS
