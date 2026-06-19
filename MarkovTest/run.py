@@ -1,9 +1,8 @@
 """
 Usage:
-    python run.py                                      # vA, W60_S30, all 15 participants
-    python run.py --version vB --profile W60_S30
-    python run.py --version vC --out results/report_vC_W60_S30.csv
-    python run.py --version vD --participants 1 2 3
+    python run.py --base-dir /Users/lap15174/EndpointSignalAgent/DataBase
+    python run.py --version vE --profile W60_S30 --base-dir /path/to/DataBase
+    python run.py --version vF --profile W120_S60 --participants 1 2 3 --base-dir /path
 """
 import argparse
 import sys
@@ -24,7 +23,28 @@ _VERSION_FN = {
 }
 
 
+def _load_new_versions():
+    """Import new versions lazily so run.py works even if states_vW/vE/vF don't exist yet."""
+    try:
+        from states_vW import assign_markov_state_vW
+        _VERSION_FN["vW"] = assign_markov_state_vW
+    except ImportError:
+        pass
+    try:
+        from states_vE import assign_markov_state_vE
+        _VERSION_FN["vE"] = assign_markov_state_vE
+    except ImportError:
+        pass
+    try:
+        from states_vF import assign_markov_state_vF
+        _VERSION_FN["vF"] = assign_markov_state_vF
+    except ImportError:
+        pass
+
+
 def main():
+    _load_new_versions()
+
     parser = argparse.ArgumentParser(description="Markov State evaluation — multi-version")
     parser.add_argument("--version", choices=list(_VERSION_FN), default="vA",
                         help="State schema version (default: vA)")
@@ -37,20 +57,30 @@ def main():
         "--out", default=None,
         help="Output CSV path. Default: results/report_{VERSION}_{PROFILE}.csv",
     )
+    parser.add_argument(
+        "--base-dir", default=None,
+        dest="base_dir",
+        help="Path to DataBase folder (default: E:/DataBase). "
+             "Mac: /Users/lap15174/EndpointSignalAgent/DataBase",
+    )
     args = parser.parse_args()
 
     out_path = args.out or f"results/report_{args.version}_{args.profile}.csv"
     participant_numbers = args.participants or list(range(1, 16))
 
-    print(f"Loading version={args.version} profile={args.profile} "
-          f"for {len(participant_numbers)} participant(s)...")
-    df = load_all_participants(
+    load_kwargs = dict(
         participant_folder_numbers=participant_numbers,
         profiles=[args.profile],
     )
+    if args.base_dir:
+        load_kwargs["base_dir"] = args.base_dir
+
+    print(f"Loading version={args.version} profile={args.profile} "
+          f"for {len(participant_numbers)} participant(s)...")
+    df = load_all_participants(**load_kwargs)
 
     if df.empty:
-        print("ERROR: No data loaded. Check E:/DataBase paths.", file=sys.stderr)
+        print("ERROR: No data loaded. Check --base-dir path.", file=sys.stderr)
         sys.exit(1)
 
     state_col = f"markov_state_{args.version}"
@@ -60,9 +90,8 @@ def main():
           f"Assigning {state_col}...")
     df[state_col] = df.apply(assign_fn, axis=1)
 
-    print(f"\nTop states overall:\n{df[state_col].value_counts().head(10).to_string()}\n")
+    print(f"\nTop states overall:\n{df[state_col].value_counts().head(15).to_string()}\n")
 
-    # analysis.py expects "markov_state_vA" — rename for compatibility
     analysis_df = df.rename(columns={state_col: "markov_state_vA"})
 
     participant_ids = sorted(analysis_df["participant_id"].unique())
