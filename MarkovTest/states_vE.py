@@ -9,7 +9,7 @@ _UTC_PLUS_7 = timezone(timedelta(hours=7))
 
 def assign_time_bucket(row) -> str:
     """Convert window_start_ts (UTC) to UTC+7 local hour and return named time bucket."""
-    ts_str = row["window_start_ts"] if not isinstance(row, dict) else row.get("window_start_ts", "")
+    ts_str = row["window_start_ts"]
     hour = pd.Timestamp(ts_str).tz_convert(_UTC_PLUS_7).hour
     if 5 <= hour <= 8:
         return "EarlyMorning"
