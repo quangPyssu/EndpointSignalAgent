@@ -29,3 +29,6 @@ participants_status.txt
 /DataBase
 /scripts
 # /markovTest
+/MarkovTest/__pycache__
+/MarkovTest/.venv
+/MarkovTest/tests/__pycache__
