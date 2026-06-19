@@ -1,0 +1,123 @@
+# Markov State Version W — Evaluation Findings
+
+**Profile evaluated:** W60_S30 (60-second windows, 30-second slide)
+**Participants:** 15
+**Total windows:** 205,733
+**State schema:** WorkMode (no second dimension)
+
+---
+
+## What Version W is
+
+Version W is a diagnostic baseline that maps each window to WorkMode alone — the application-category half of Version A — with no EngagementMode dimension.
+
+```
+markov_state_vW = WorkMode
+```
+
+Same 13 WorkMode states as vA. Purpose: empirically determine how much of vA's anomaly signal (P005 8.3%, P011 12.5%) survives when the EngagementMode dimension is removed.
+
+---
+
+## Observed state space
+
+Top states by frequency across all participants (W60_S30):
+
+| State | Count |
+|---|---|
+| OtherWork | 101326 |
+| BrowserWork | 54792 |
+| DeveloperWork | 18183 |
+| SystemWork | 13019 |
+| MixedWork | 8716 |
+| CommsWork | 6790 |
+| OfficeWork | 1864 |
+| MediaWork | 525 |
+| TerminalWork | 291 |
+| NoApp | 202 |
+| FileWork | 24 |
+| GamingWork | 1 |
+
+---
+
+## Per-participant results
+
+| PID | Windows | States | Transitions | RarePct | NormalUnseen | AbnUnseen |
+|---|---|---|---|---|---|---|
+| 001 | 12788 | 9 | 47 | 27.7% | 0.2% | 0.0% |
+| 002 | 5223 | 6 | 26 | 23.1% | 0.4% | — |
+| 003 | 20685 | 10 | 68 | 26.5% | 0.1% | — |
+| 004 | 3135 | 6 | 27 | 37.0% | 0.5% | — |
+| 005 | 23658 | 10 | 45 | 66.7% | 0.1% | 0.0% |
+| 006 | 10764 | 7 | 21 | 47.6% | 0.0% | 0.0% |
+| 007 | 17626 | 8 | 40 | 22.5% | 0.1% | — |
+| 008 | 10462 | 7 | 29 | 20.7% | 0.0% | — |
+| 009 | 7418 | 10 | 53 | 47.2% | 0.1% | — |
+| 010 | 29796 | 9 | 60 | 30.0% | 0.0% | — |
+| 011 | 10975 | 8 | 36 | 52.8% | 0.3% | 0.0% |
+| 012 | 6076 | 9 | 38 | 50.0% | 0.1% | — |
+| 013 | 31570 | 8 | 54 | 31.5% | 0.1% | — |
+| 014 | 4191 | 6 | 34 | 50.0% | 0.5% | — |
+| 015 | 11366 | 9 | 48 | 47.9% | 0.2% | — |
+
+**— = no annotation data for this participant**
+
+---
+
+## Acceptance criteria assessment
+
+### Criterion 1: Unique states per participant (13 theoretical max)
+
+**Result:** 6–10 states per participant (range across all 15 participants)
+
+**Verdict:** PASS — well within the 13-state theoretical maximum, and lower than vA's 18–35 as expected since EngagementMode is removed. The compact state space confirms WorkMode alone produces a much sparser graph.
+
+### Criterion 2: RarePct < 60%
+
+**Result:** 20.7%–66.7% (P005 is the sole outlier at 66.7%; all other participants are ≤52.8%)
+
+**Verdict:** MARGINAL — 14 of 15 participants are under 60%, but P005 breaches the threshold at 66.7%. Despite the smaller state space vs. vA, P005's transition graph remains sparse due to highly concentrated behavior in a single dominant state.
+
+### Criterion 3: NormalUnseen < 20% (critical)
+
+**Result:** 0.0%–0.5% across all participants
+
+**Verdict:** PASS — the compact 13-state WorkMode space trains trivially. Every normal Markov model covers its transitions with near-zero unseen rate. Well within threshold.
+
+### Criterion 4: AbnUnseen > NormalUnseen (anomaly signal — the diagnostic)
+
+| PID | NormalUnseen | AbnUnseen | Signal | vs. vA AbnUnseen |
+|---|---|---|---|---|
+| 001 | 0.2% | 0.0% | No signal | vA: 0.7% |
+| 005 | 0.1% | 0.0% | No signal | vA: 8.3% |
+| 006 | 0.0% | 0.0% | No signal | vA: 0.0% |
+| 011 | 0.3% | 0.0% | No signal | vA: 12.5% |
+
+**Verdict:** FAIL — AbnUnseen is 0.0% for all four annotated participants. The anomaly signal present in vA (P005: 8.3%, P011: 12.5%) has completely disappeared. Removing EngagementMode eliminates the signal entirely.
+
+---
+
+## Comparison to Version A
+
+| Metric | Version A | Version W |
+|---|---|---|
+| Theoretical max states | 53 | 13 |
+| Observed state range | 18–35 | 6–10 |
+| RarePct range | 52.9%–69.9% | 20.7%–66.7% |
+| NormalUnseen range | 0.0%–5.6% | 0.0%–0.5% |
+| P005 AbnUnseen | 8.3% | 0.0% |
+| P011 AbnUnseen | 12.5% | 0.0% |
+
+---
+
+## Overall verdict
+
+**EngagementMode is load-bearing for the anomaly signal. Removing it kills the signal completely.**
+
+vW's WorkMode-only state space improves RarePct and dramatically lowers NormalUnseen (0.0–0.5% vs. vA's 0.0–5.6%), confirming the compact state space is easier to train. However, the Criterion 4 diagnostic result is decisive: AbnUnseen drops to 0.0% for every annotated participant, including P005 and P011 where vA showed 8.3% and 12.5% respectively.
+
+This means abnormal sessions do not produce novel WorkMode transitions — they only produce novel *combinations* of WorkMode and EngagementMode. The anomaly signal is encoded in how engagement level shifts during abnormal work, not merely in what application categories are active.
+
+**Implication for vF (the triple product):** EngagementMode is mandatory, not optional. The time-of-day dimension in vE/vF is an extension on top of a necessary EngagementMode foundation. vA's `WorkMode × EngagementMode` product must be preserved in any forward design. vW should not be used as a standalone classifier.
+
+*Generated by `MarkovTest/run.py` · Version W · Profile W60_S30 · 2026-06-19*
