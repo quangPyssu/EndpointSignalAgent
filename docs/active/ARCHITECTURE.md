@@ -39,10 +39,12 @@ ISignalBroadcaster
   │                                           └──(ESA_WRITE_RAW_SIGNALS)──► spool/raw_signals.jsonl
   └──► Feature channel ─► FeatureExtractorService ─► spool/features.db (WAL, 500-row unsent cap)
 
-spool/features.db ─► FeatureCsvStreamService ─► Backend /features/row  (one text/csv POST per row)
+spool/signals.jsonl ─► SignalUploadService ──(Normal mode, batch POST)──► Backend /send
+
+spool/features.db ─► FeatureCsvStreamService ─► Backend /features  (JSON batch POST per group)
                  └──► FeatureCleanupService (1h, prune >500 unsent + 7-day sent retention)
 
-Backend /status ─► StatusPollService ─► Channel<StatusResponse> ─► DecisionProcessorService ─► IDecisionHandler
+Backend /status ─► StatusPollService ─► Channel<StatusDecision> ─► DecisionProcessorService ─► IDecisionHandler
 
 DeviceGuardService ──(idle poll, P/Invoke)──► LockWorkStation / SetSuspendState
 
@@ -63,7 +65,7 @@ Configured in `AgentHostBootstrap`:
      - writer channel → `SignalWriterService`
      - feature channel → `FeatureExtractorService` (only written when `EnableLiveExtraction=true`)
 
-2. **Decision queue** (`Channel<StatusResponse>`)
+2. **Decision queue** (`Channel<StatusDecision>`)
    - Capacity: `Agent:DecisionQueueCapacity`
    - Full mode: `DropOldest`
    - Single writer/reader (Normal mode only)
@@ -88,6 +90,7 @@ All modes:
 
 Normal mode (`Agent:Mode=Normal`) additionally starts:
 
+- `SignalUploadService`
 - `StatusPollService`
 - `DecisionProcessorService`
 
@@ -140,15 +143,12 @@ Dataset exports in `exports/participant_<participantId>_<timestamp>/` include:
 - `UseBackend`
 - `BaseUrl` (required absolute URL when backend enabled)
 - `EnrollPath`, `SendPath`, `StatusPath`, `FeaturesPath`
-- `FeatureRowCsvPath` (default: `/features/row`) — CSV streaming endpoint
 - `TimeoutSeconds`
 
 ### `Agent` (`AgentOptions`)
 
 - `Mode` (`Normal` | `DatasetCollection`)
-- `OutgoingQueueCapacity` (10..100000)
 - `DecisionQueueCapacity` (10..100000)
-- `DefaultReportSeconds` (1..3600)
 - `StatusPollSeconds` (1..3600)
 - `DeviceGuard` section:
   - `Enabled` (default: `false`)

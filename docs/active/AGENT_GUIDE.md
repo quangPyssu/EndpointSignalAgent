@@ -36,11 +36,13 @@ Always-on services:
 4. Feature pipeline:
    - `FeatureExtractorService` (live extraction is forced off in DatasetCollection mode)
 5. Feature upload/cleanup (all modes):
-   - `FeatureCsvStreamService` (per-row text/csv POST to backend; no-op drain in DatasetCollection mode)
+   - `FeatureCsvStreamService` (JSON batch POST to `/features`; marks rows as sent locally in DatasetCollection mode)
    - `FeatureCleanupService`
 
 Normal mode only (`Agent:Mode=Normal`):
-6. Status pipeline:
+6. Signal upload:
+   - `SignalUploadService` (reads `spool/signals.jsonl` via `SpoolFileSignalProvider`, POSTs batches to `/send`)
+7. Status pipeline:
    - `StatusPollService`
    - `DecisionProcessorService`
 
@@ -71,9 +73,7 @@ Broadcaster sends each signal to two channels:
 - `spool/signals.jsonl` (legacy send-compatible format)
 - `spool/raw_signals.jsonl` (canonical raw collector format)
 
-In Normal mode, `BatchProducerService` reads from `spool/signals.jsonl` via `SpoolFileSignalProvider` and enqueues `SignalBatchRequest`.
-
-In Normal mode, `BatchSendService` sends batches to backend.
+In Normal mode, `SignalUploadService` reads from `spool/signals.jsonl` via `SpoolFileSignalProvider` and POSTs `SignalBatchRequest` batches directly to backend `/send`.
 
 In DatasetCollection mode, backend send/status/decision pipelines are not started.
 
@@ -112,17 +112,15 @@ In DatasetCollection mode, backend send/status/decision pipelines are not starte
 ### Send pipeline
 
 - `src/SignalCollection/Providers/SpoolFileSignalProvider.cs`
-- `src/SignalCollection/Services/BatchProducerService.cs`
-- `src/SignalCollection/Services/BatchSendService.cs`
+- `src/SignalCollection/Services/SignalUploadService.cs`
 
 ### Feature pipeline
 
 - `src/FeatureExtraction/Services/FeatureExtractorService.cs`
 - `src/FeatureExtraction/SignalAggregator/*.cs`
 - `src/FeatureExtraction/Storage/FeatureStore.cs`
-- `src/FeatureExtraction/Services/FeatureUploadService.cs`
+- `src/FeatureExtraction/Services/FeatureCsvStreamService.cs`
 - `src/FeatureExtraction/Services/FeatureCleanupService.cs`
-- `src/FeatureExtraction/Services/KeyboardCommandService.cs`
 
 ### Status/decision
 
