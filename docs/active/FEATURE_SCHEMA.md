@@ -1,4 +1,4 @@
-# Feature Extraction Schema (v1.2)
+# Feature Extraction Schema (v1.2.2)
 
 ## Windowing Rules
 - Event-time windowing: use `SignalEvent.ts` (broadcast timestamp), never processing time.
@@ -169,11 +169,23 @@ Signal: `SystemResourceTick` — a periodic sample with payload fields `cpu_pct`
 | `active_resource_ratio` | Mean of `(cpu_high_ratio, net_activity_ratio, [gpu_high_ratio if available])` |
 | `has_system_data` | Always 1.0 when any `SystemResourceTick` events were in the window |
 
+## quality_window_features (v1.2.1+)
+
+Not tied to a collector signal — derived from `PowerSuspend`/`PowerResume`/`CollectionGapDetected` events observed by `FeatureExtractorService`, independent of any single collector's aggregator.
+
+| Feature | Computation |
+|---|---|
+| `has_collection_gap` | `1.0` if the window overlaps a detected `CollectionGapDetected` interval (sleep/hibernate); `0.0` otherwise. Defaults to `0.0` on the historical replay / on-demand extraction path. |
+| `in_warm_up` | `1.0` if `window_start_ts` falls within `WarmUpAfterResumeSec` (default 30s) seconds after a `PowerResume` event; `0.0` otherwise. Defaults to `0.0` on the historical replay / on-demand extraction path. |
+
+Scoring consumers should filter: `WHERE has_collection_gap = 0 AND in_warm_up = 0`.
+
 ## Data Quality
 Missingness is represented explicitly by:
 - `has_app_data`, `has_idle_data`, `has_display_data`, `has_net_data`
 - `presence_available_ratio`
 - API/status quality counts and ratios (`idle_api_fail_count`, `public_ip_fetch_fail_count`, `public_ip_backoff_ratio`)
+- Sleep/resume transition quality (`has_collection_gap`, `in_warm_up`) — see `quality_window_features` above
 
 ## v1 Compatibility
 Legacy columns are still present/compatible:
