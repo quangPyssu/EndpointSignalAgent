@@ -16,6 +16,14 @@ public sealed class AgentOptions
     public string Mode { get; set; } = AgentModes.DatasetCollection;
     public int StatusPollSeconds { get; set; } = 5;
 
+    /// <summary>
+    /// Minimum seconds between automatic LockWorkStation() calls triggered by
+    /// a backend ALERT decision. Prevents re-locking on every status poll
+    /// while a sustained ALERT persists. 0 disables the cooldown (locks every
+    /// poll that reads ALERT — not recommended).
+    /// </summary>
+    public int LockCooldownSeconds { get; set; } = 300;
+
     public int DecisionQueueCapacity { get; set; } = 300;
 
     public DeviceGuardOptions DeviceGuard { get; set; } = new();

@@ -67,6 +67,7 @@ public static class AgentHostBootstrap
             .Validate(o => AgentModes.IsValid(o.Mode), "Agent:Mode must be either 'Normal' or 'DatasetCollection'")
             .Validate(o => o.DecisionQueueCapacity is >= 10 and <= 100_000, "Agent:DecisionQueueCapacity out of range")
             .Validate(o => o.StatusPollSeconds is >= 1 and <= 3600, "Agent:StatusPollSeconds out of range")
+            .Validate(o => o.LockCooldownSeconds >= 0, "Agent:LockCooldownSeconds must be >= 0")
             .ValidateOnStart();
 
         builder.Services.AddOptions<FeatureExtractorOptions>()
