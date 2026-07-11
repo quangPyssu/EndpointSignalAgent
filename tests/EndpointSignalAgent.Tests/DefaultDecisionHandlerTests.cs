@@ -90,4 +90,65 @@ public sealed class DefaultDecisionHandlerTests
         Assert.False(lockCalled);
         Assert.False(sleepCalled);
     }
+
+    [Theory]
+    [InlineData("anomaly", "scored:alert", "lock")]
+    [InlineData("anomaly", "scored:watch", "unknown")]
+    [InlineData("normal", "scored", "allow")]
+    [InlineData("normal", "scored:watch", "allow")]
+    [InlineData("unknown", "no_model", "unknown")]
+    [InlineData("unknown", "cold_start", "unknown")]
+    public void TranslateLabel_MapsGatewayVocabularyToDispatchLabel(
+        string gatewayLabel, string reason, string expectedDispatchLabel)
+    {
+        var result = DefaultDecisionHandler.TranslateLabel(gatewayLabel, reason);
+        Assert.Equal(expectedDispatchLabel, result);
+    }
+
+    [Fact]
+    public void Handle_AlertTier_LocksOnce_ThenRespectsCooldown()
+    {
+        var state = new AgentState();
+        var lockCount = 0;
+        var now = new DateTimeOffset(2026, 7, 11, 12, 0, 0, TimeSpan.Zero);
+        var handler = new DefaultDecisionHandler(
+            NullLogger<DefaultDecisionHandler>.Instance,
+            state,
+            lockCooldownSeconds: 300,
+            clock: () => now,
+            lockWorkstationOverride: () => lockCount++);
+
+        var alert = MakeDecision("anomaly") with { Reason = "scored:alert" };
+
+        handler.Handle(alert);
+        Assert.Equal(1, lockCount);
+
+        // Second poll 30s later, still ALERT: cooldown blocks a re-lock.
+        now = now.AddSeconds(30);
+        handler.Handle(alert);
+        Assert.Equal(1, lockCount);
+
+        // 301s after the first lock: cooldown has elapsed, locks again.
+        now = now.AddSeconds(271);
+        handler.Handle(alert);
+        Assert.Equal(2, lockCount);
+    }
+
+    [Fact]
+    public void Handle_WatchTier_NeverLocks()
+    {
+        var state = new AgentState();
+        var lockCount = 0;
+        var handler = new DefaultDecisionHandler(
+            NullLogger<DefaultDecisionHandler>.Instance,
+            state,
+            lockCooldownSeconds: 300,
+            clock: () => DateTimeOffset.UtcNow,
+            lockWorkstationOverride: () => lockCount++);
+
+        var watch = MakeDecision("anomaly") with { Reason = "scored:watch" };
+        handler.Handle(watch);
+
+        Assert.Equal(0, lockCount);
+    }
 }
