@@ -33,7 +33,15 @@ if (Test-Path $registerScript) {
 $exeFullPath = (Resolve-Path $ExecutablePath).Path
 Write-Host "Registering startup task '$TaskName' for user $env:USERNAME"
 Write-Host "Executable: $exeFullPath"
-$workingDirectory = Split-Path -Path $exeFullPath -Parent
+# The agent persists its enrollment/signal spool as paths relative to its
+# current working directory (e.g. "spool\enrollment.json"). The exe's own
+# folder is typically Program Files (via the installer), which a Limited
+# (non-elevated) scheduled task -- how this task runs -- cannot write to.
+# Point the working directory at the per-user, always-writable LocalAppData
+# instead, so the relative spool paths resolve somewhere the task can
+# actually create files.
+$workingDirectory = Join-Path $env:LOCALAPPDATA "ContinuousAuth\agent"
+New-Item -ItemType Directory -Path $workingDirectory -Force | Out-Null
 Write-Host "Working directory: $workingDirectory"
 $action = New-ScheduledTaskAction -Execute $exeFullPath -WorkingDirectory $workingDirectory
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
