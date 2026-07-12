@@ -27,7 +27,18 @@ public static class AgentHostBootstrap
 {
     public static IHost BuildHost(string[] args)
     {
-        var builder = Host.CreateApplicationBuilder(args);
+        // HostApplicationBuilder's default ContentRootPath is the process's
+        // current working directory -- but Program.cs deliberately points
+        // that at a writable per-user data directory (so the app's
+        // CWD-relative spool paths work when installed under Program
+        // Files), which is NOT where appsettings*.json ship. Anchor the
+        // content root at the exe's own folder explicitly so config
+        // loading is unaffected by that CWD change.
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
         ConfigureServices(builder);
         return builder.Build();
     }
