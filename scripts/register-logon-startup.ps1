@@ -19,11 +19,7 @@ if ([string]::IsNullOrWhiteSpace($ExecutablePath) -or -not (Test-Path $Executabl
 $exeFullPath = (Resolve-Path $ExecutablePath).Path
 Write-Host "Registering startup task '$TaskName' for user $env:USERNAME"
 Write-Host "Executable: $exeFullPath"
-# See install-logon-startup.ps1 for why this isn't the exe's own directory:
-# the agent's relative "spool\..." paths need a working directory the
-# Limited-run-level scheduled task can actually write to.
-$workingDirectory = Join-Path $env:LOCALAPPDATA "ContinuousAuth\agent"
-New-Item -ItemType Directory -Path $workingDirectory -Force | Out-Null
+$workingDirectory = Split-Path -Path $exeFullPath -Parent
 Write-Host "Working directory: $workingDirectory"
 $action = New-ScheduledTaskAction -Execute $exeFullPath -WorkingDirectory $workingDirectory
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
